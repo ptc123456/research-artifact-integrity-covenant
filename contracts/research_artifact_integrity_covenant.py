@@ -163,6 +163,10 @@ def _validate_decisions(raw: object, artifacts: list[dict[str, object]]) -> list
             raise gl.vm.UserError("Assessment output contains an unsupported identity or access value.")
         if version not in VERSION_VALUES or license_value not in LICENSE_VALUES:
             raise gl.vm.UserError("Assessment output contains an unsupported version or license value.")
+        if access == "RESTRICTED_DISCLOSED" and not artifacts[index]["restricted_access_allowed"]:
+            raise gl.vm.UserError("Assessment output permits restricted access against the declaration.")
+        if license_value == "NOT_APPLICABLE" and artifacts[index]["license_required"]:
+            raise gl.vm.UserError("Assessment output marks a required license as not applicable.")
         validated.append(
             {
                 "source_id": str(source_id),

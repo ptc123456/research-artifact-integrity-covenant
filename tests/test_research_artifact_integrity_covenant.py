@@ -106,6 +106,58 @@ def test_ready_assessment_records_exact_decision(direct_vm, direct_deploy):
     }
 
 
+@pytest.mark.parametrize(
+    ("field", "value", "expected_status"),
+    [
+        ("identity", "MISMATCH", "BLOCKED"),
+        ("access", "MISSING", "BLOCKED"),
+        ("version", "SUPERSEDED", "DEGRADED"),
+        ("license", "ABSENT", "BLOCKED"),
+    ],
+)
+def test_each_consequential_decision_field_controls_readback(direct_vm, direct_deploy, field, value, expected_status):
+    contract, profile_id = _active_profile(direct_vm, direct_deploy)
+    direct_vm.warp("2026-08-11T00:01:01+00:00")
+    direct_vm.mock_web(r"api\.crossref\.org/works/", {"status": 200, "body": "{}"})
+    direct_vm.mock_web(r"zenodo\.org/api/records/12786010", {"status": 200, "body": "{}"})
+    decision = {
+        "source_id": "12786010",
+        "identity": "MATCH",
+        "access": "AVAILABLE",
+        "version": "ALIGNED",
+        "license": "DECLARED",
+    } | {field: value}
+    direct_vm.mock_llm(r"evidence classifier", json.dumps({"decisions": [decision]}))
+    contract.assess_profile(profile_id)
+
+    assert contract.get_current_status(profile_id) == expected_status
+    assert contract.get_artifact_decision(profile_id, 1, 0)[field] == value
+
+
+@pytest.mark.parametrize(
+    ("access", "license_value", "message"),
+    [
+        ("RESTRICTED_DISCLOSED", "DECLARED", "restricted access against the declaration"),
+        ("AVAILABLE", "NOT_APPLICABLE", "required license as not applicable"),
+    ],
+)
+def test_cross_field_decision_conflicts_roll_back(direct_vm, direct_deploy, access, license_value, message):
+    contract, profile_id = _active_profile(direct_vm, direct_deploy)
+    direct_vm.warp("2026-08-11T00:01:01+00:00")
+    direct_vm.mock_web(r"api\.crossref\.org/works/", {"status": 200, "body": "{}"})
+    direct_vm.mock_web(r"zenodo\.org/api/records/12786010", {"status": 200, "body": "{}"})
+    direct_vm.mock_llm(
+        r"evidence classifier",
+        json.dumps({"decisions": [{
+            "source_id": "12786010", "identity": "MATCH", "access": access,
+            "version": "ALIGNED", "license": license_value,
+        }]}),
+    )
+    with direct_vm.expect_revert(message):
+        contract.assess_profile(profile_id)
+    assert contract.get_profile(profile_id)["assessment_count"] == "0"
+
+
 def test_malformed_ai_output_rolls_back(direct_vm, direct_deploy):
     contract, profile_id = _active_profile(direct_vm, direct_deploy)
     direct_vm.warp("2026-08-11T00:01:01+00:00")
@@ -126,4 +178,3 @@ def test_successor_supersedes_only_current_version(direct_vm, direct_deploy):
     assert contract.get_profile(successor_id)["state"] == "ACTIVE"
     with direct_vm.expect_revert("active version exists"):
         contract.create_profile(DOI, "")
-
