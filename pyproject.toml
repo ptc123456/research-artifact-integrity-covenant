@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "research-artifact-integrity-covenant"
+version = "0.1.0"
+description = "GenLayer project for evidence-bound research artifact integrity assessments."
+requires-python = ">=3.12"
+dependencies = [
+  "cloudpickle==3.1.2",
+  "genlayer-test @ git+https://github.com/genlayerlabs/genlayer-testing-suite.git@17903671350d38afad5bd02b784ca1722a2becdc",
+  "pytest==8.4.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.setuptools]
+packages = []

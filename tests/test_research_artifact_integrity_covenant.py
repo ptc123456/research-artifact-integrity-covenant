@@ -1,0 +1,129 @@
+import json
+
+import pytest
+
+
+CONTRACT = "contracts/research_artifact_integrity_covenant.py"
+DOI = "10.5281/zenodo.12786010"
+ARTIFACT_ARGS = (
+    "DATA",
+    "ZENODO_RECORD",
+    "12786010",
+    "Dataset deposited for the canonical work",
+    "record 12786010",
+    "sha256:0123456789abcdef",
+    True,
+    False,
+    "",
+)
+
+
+def _deploy(direct_vm, direct_deploy):
+    direct_vm.warp("2026-08-11T00:00:00+00:00")
+    return direct_deploy(CONTRACT)
+
+
+def _active_profile(direct_vm, direct_deploy):
+    contract = _deploy(direct_vm, direct_deploy)
+    profile_id = contract.create_profile(DOI, "")
+    contract.add_artifact(profile_id, *ARTIFACT_ARGS)
+    contract.activate_profile(profile_id)
+    return contract, profile_id
+
+
+def _mock_ready(direct_vm):
+    direct_vm.mock_web(r"api\.crossref\.org/works/", {"status": 200, "body": '{"message":{"DOI":"10.5281/zenodo.12786010"}}'})
+    direct_vm.mock_web(r"zenodo\.org/api/records/12786010", {"status": 200, "body": '{"id":12786010,"metadata":{"license":{"id":"cc-by-4.0"}}}'})
+    direct_vm.mock_llm(
+        r"evidence classifier",
+        json.dumps(
+            {
+                "decisions": [
+                    {
+                        "source_id": "12786010",
+                        "identity": "MATCH",
+                        "access": "AVAILABLE",
+                        "version": "ALIGNED",
+                        "license": "DECLARED",
+                    }
+                ]
+            }
+        ),
+    )
+
+
+def test_draft_authority_and_immutability(direct_vm, direct_deploy, direct_bob):
+    contract = _deploy(direct_vm, direct_deploy)
+    profile_id = contract.create_profile(DOI, "")
+    with direct_vm.prank(direct_bob):
+        with direct_vm.expect_revert("Only the profile authority"):
+            contract.add_artifact(profile_id, *ARTIFACT_ARGS)
+    contract.add_artifact(profile_id, *ARTIFACT_ARGS)
+    contract.activate_profile(profile_id)
+    with direct_vm.expect_revert("Only a draft"):
+        contract.add_artifact(profile_id, *ARTIFACT_ARGS)
+
+
+def test_duplicate_artifact_and_empty_activation_do_not_write(direct_vm, direct_deploy):
+    contract = _deploy(direct_vm, direct_deploy)
+    empty_id = contract.create_profile("10.1000/empty", "")
+    with direct_vm.expect_revert("at least one artifact"):
+        contract.activate_profile(empty_id)
+    assert contract.get_profile(empty_id)["state"] == "DRAFT"
+
+    profile_id = contract.create_profile(DOI, "")
+    contract.add_artifact(profile_id, *ARTIFACT_ARGS)
+    with direct_vm.expect_revert("already registered"):
+        contract.add_artifact(profile_id, *ARTIFACT_ARGS)
+    assert contract.get_profile(profile_id)["artifact_count"] == "1"
+
+
+def test_premature_assessment_is_no_write(direct_vm, direct_deploy):
+    contract, profile_id = _active_profile(direct_vm, direct_deploy)
+    with direct_vm.expect_revert("interval has not elapsed"):
+        contract.assess_profile(profile_id)
+    profile = contract.get_profile(profile_id)
+    assert profile["assessment_count"] == "0"
+    assert profile["current_status"] == ""
+
+
+def test_ready_assessment_records_exact_decision(direct_vm, direct_deploy):
+    contract, profile_id = _active_profile(direct_vm, direct_deploy)
+    direct_vm.warp("2026-08-11T00:01:01+00:00")
+    _mock_ready(direct_vm)
+    contract.assess_profile(profile_id)
+
+    assert contract.get_current_status(profile_id) == "READY"
+    assert contract.is_artifact_set_ready(profile_id) is True
+    decision = contract.get_artifact_decision(profile_id, 1, 0)
+    assert decision == {
+        "access": "AVAILABLE",
+        "identity": "MATCH",
+        "license": "DECLARED",
+        "license_required": "true",
+        "source_id": "12786010",
+        "version": "ALIGNED",
+    }
+
+
+def test_malformed_ai_output_rolls_back(direct_vm, direct_deploy):
+    contract, profile_id = _active_profile(direct_vm, direct_deploy)
+    direct_vm.warp("2026-08-11T00:01:01+00:00")
+    direct_vm.mock_web(r"api\.crossref\.org/works/", {"status": 200, "body": "{}"})
+    direct_vm.mock_web(r"zenodo\.org/api/records/12786010", {"status": 200, "body": "{}"})
+    direct_vm.mock_llm(r"evidence classifier", '{"decisions":[],"extra":true}')
+    with direct_vm.expect_revert("only decisions"):
+        contract.assess_profile(profile_id)
+    assert contract.get_profile(profile_id)["assessment_count"] == "0"
+
+
+def test_successor_supersedes_only_current_version(direct_vm, direct_deploy):
+    contract, first_id = _active_profile(direct_vm, direct_deploy)
+    successor_id = contract.create_profile(DOI, first_id)
+    contract.add_artifact(successor_id, *ARTIFACT_ARGS)
+    contract.activate_profile(successor_id)
+    assert contract.get_profile(first_id)["state"] == "SUPERSEDED"
+    assert contract.get_profile(successor_id)["state"] == "ACTIVE"
+    with direct_vm.expect_revert("active version exists"):
+        contract.create_profile(DOI, "")
+
