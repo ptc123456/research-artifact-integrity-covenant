@@ -32,6 +32,19 @@ def _active_profile(direct_vm, direct_deploy):
     return contract, profile_id
 
 
+def _active_github_license_profile(direct_vm, direct_deploy):
+    contract = _deploy(direct_vm, direct_deploy)
+    profile_id = contract.create_profile(DOI, "")
+    contract.add_artifact(
+        profile_id, "CODE", "GITHUB_COMMIT",
+        "genlayerlabs/genlayer-js/0123456789abcdef0123456789abcdef01234567",
+        "SDK implementation for the canonical work", "exact commit", "",
+        True, False, "LICENSE",
+    )
+    contract.activate_profile(profile_id)
+    return contract, profile_id
+
+
 def _mock_ready(direct_vm):
     direct_vm.mock_web(r"api\.crossref\.org/works/", {"status": 200, "body": '{"message":{"DOI":"10.5281/zenodo.12786010"}}'})
     direct_vm.mock_web(r"zenodo\.org/api/records/12786010", {"status": 200, "body": '{"id":12786010,"metadata":{"license":{"id":"cc-by-4.0"}}}'})
@@ -69,7 +82,7 @@ def test_draft_authority_and_immutability(direct_vm, direct_deploy, direct_bob):
     with direct_vm.prank(direct_bob):
         with direct_vm.expect_revert("Only the profile authority"):
             contract.add_artifact(profile_id, *ARTIFACT_ARGS)
-    contract.add_artifact(profile_id, *ARTIFACT_ARGS)
+    assert int(contract.add_artifact(profile_id, *ARTIFACT_ARGS)) == 0
     contract.activate_profile(profile_id)
     with direct_vm.expect_revert("Only a draft"):
         contract.add_artifact(profile_id, *ARTIFACT_ARGS)
@@ -193,6 +206,65 @@ def test_declared_license_path_cannot_be_marked_not_applicable(direct_vm, direct
     with direct_vm.expect_revert("ignores a declared license path"):
         contract.assess_profile(profile_id)
     assert contract.get_profile(profile_id)["assessment_count"] == "0"
+
+
+def test_unavailable_required_license_is_unresolved_then_recovers(direct_vm, direct_deploy):
+    contract, profile_id = _active_github_license_profile(direct_vm, direct_deploy)
+    direct_vm.warp("2026-08-11T00:01:01+00:00")
+    direct_vm.mock_web(r"api\.crossref\.org/works/", {"status": 200, "body": "{}"})
+    direct_vm.mock_web(r"api\.github\.com/repos/genlayerlabs/genlayer-js/commits/", {"status": 200, "body": "{}"})
+    direct_vm.mock_web(r"raw\.githubusercontent\.com/genlayerlabs/genlayer-js/", {"status": 0, "body": ""})
+    unresolved = {
+        "source_id": "genlayerlabs/genlayer-js/0123456789abcdef0123456789abcdef01234567",
+        "identity": "MATCH", "access": "AVAILABLE", "version": "ALIGNED", "license": "UNRESOLVED",
+    }
+    direct_vm.mock_llm(r"evidence classifier", json.dumps({"decisions": [unresolved]}))
+    contract.assess_profile(profile_id)
+    assert contract.get_current_status(profile_id) == "UNRESOLVED"
+
+    direct_vm.warp("2026-08-11T00:02:02+00:00")
+    direct_vm.clear_mocks()
+    direct_vm.mock_web(r"api\.crossref\.org/works/", {"status": 200, "body": "{}"})
+    direct_vm.mock_web(r"api\.github\.com/repos/genlayerlabs/genlayer-js/commits/", {"status": 200, "body": "{}"})
+    direct_vm.mock_web(r"raw\.githubusercontent\.com/genlayerlabs/genlayer-js/", {"status": 200, "body": "MIT"})
+    direct_vm.mock_llm(r"evidence classifier", json.dumps({"decisions": [unresolved | {"license": "DECLARED"}]}))
+    contract.assess_profile(profile_id)
+    assert contract.get_current_status(profile_id) == "READY"
+
+
+def test_unavailable_required_license_cannot_commit_absent(direct_vm, direct_deploy):
+    contract, profile_id = _active_github_license_profile(direct_vm, direct_deploy)
+    direct_vm.warp("2026-08-11T00:01:01+00:00")
+    direct_vm.mock_web(r"api\.crossref\.org/works/", {"status": 200, "body": "{}"})
+    direct_vm.mock_web(r"api\.github\.com/repos/genlayerlabs/genlayer-js/commits/", {"status": 200, "body": "{}"})
+    direct_vm.mock_web(r"raw\.githubusercontent\.com/genlayerlabs/genlayer-js/", {"status": 0, "body": ""})
+    direct_vm.mock_llm(
+        r"evidence classifier",
+        json.dumps({"decisions": [{
+            "source_id": "genlayerlabs/genlayer-js/0123456789abcdef0123456789abcdef01234567",
+            "identity": "MATCH", "access": "AVAILABLE", "version": "ALIGNED", "license": "ABSENT",
+        }]}),
+    )
+    with direct_vm.expect_revert("required-license evidence must remain unresolved"):
+        contract.assess_profile(profile_id)
+    assert contract.get_profile(profile_id)["assessment_count"] == "0"
+
+
+def test_complete_transport_failure_records_only_unresolved(direct_vm, direct_deploy):
+    contract, profile_id = _active_profile(direct_vm, direct_deploy)
+    direct_vm.warp("2026-08-11T00:01:01+00:00")
+    direct_vm.mock_web(r"api\.crossref\.org/works/", {"status": 0, "body": ""})
+    direct_vm.mock_web(r"zenodo\.org/api/records/12786010", {"status": 0, "body": ""})
+    direct_vm.mock_llm(
+        r"evidence classifier",
+        json.dumps({"decisions": [{
+            "source_id": "12786010", "identity": "UNRESOLVED", "access": "UNRESOLVED",
+            "version": "UNRESOLVED", "license": "UNRESOLVED",
+        }]}),
+    )
+    contract.assess_profile(profile_id)
+    assert contract.get_current_status(profile_id) == "UNRESOLVED"
+    assert contract.get_artifact_decision(profile_id, 1, 0)["license"] == "UNRESOLVED"
 
 
 def test_malformed_ai_output_rolls_back(direct_vm, direct_deploy):

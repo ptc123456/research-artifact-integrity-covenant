@@ -18,6 +18,7 @@ export interface PendingTransaction {
   hash: `0x${string}`;
   method: string;
   expectedId: string;
+  expectedFields?: StringRecord;
   submittedAt: string;
 }
 
@@ -34,6 +35,47 @@ function asStringRecord(value: unknown, label: string): StringRecord {
   const entries = Object.entries(value as Record<string, unknown>);
   if (entries.some(([, item]) => typeof item !== "string")) throw new Error(`${label} returned non-string fields.`);
   return Object.fromEntries(entries) as StringRecord;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+export function transactionReturnValue(receipt: unknown): unknown {
+  const root = asRecord(receipt);
+  const data = asRecord(root?.data);
+  const consensus = asRecord(root?.consensus_data) ?? asRecord(data?.consensus_data);
+  const leaders = consensus?.leader_receipt;
+  if (!Array.isArray(leaders) || leaders.length === 0) throw new Error("Transaction return evidence was missing.");
+  const result = asRecord(asRecord(leaders[leaders.length - 1])?.result);
+  const payload = asRecord(result?.payload);
+  if (result?.status !== "return" || typeof payload?.readable !== "string") {
+    throw new Error("Transaction return evidence was malformed.");
+  }
+  try {
+    return JSON.parse(payload.readable);
+  } catch {
+    return payload.readable;
+  }
+}
+
+export function returnedProfileId(receipt: unknown): string {
+  const value = transactionReturnValue(receipt);
+  if (typeof value !== "string" || !/^profile-[0-9]{6}$/.test(value)) throw new Error("create_profile returned an invalid profile ID.");
+  return value;
+}
+
+export function returnedArtifactIndex(receipt: unknown): number {
+  const value = transactionReturnValue(receipt);
+  const index = typeof value === "number" ? value : Number(value);
+  if (!Number.isSafeInteger(index) || index < 0) throw new Error("add_artifact returned an invalid artifact index.");
+  return index;
+}
+
+export function assertReadbackFields(actual: StringRecord, expected: StringRecord): void {
+  for (const [key, value] of Object.entries(expected)) {
+    if (actual[key] !== value) throw new Error(`Contract readback mismatch for ${key}.`);
+  }
 }
 
 export async function readProfile(profileId: string): Promise<StringRecord> {
@@ -56,19 +98,17 @@ export async function readDecision(profileId: string, epoch: number, index: numb
   return asStringRecord(value, "Decision readback");
 }
 
-export async function getProfileCount(): Promise<number> {
-  const value = await readClient.readContract({ address: requireAddress(), functionName: "get_profile_count", args: [] });
-  const count = Number(value);
-  if (!Number.isSafeInteger(count) || count < 0) throw new Error("Profile count readback was invalid.");
-  return count;
-}
-
 export function loadPendingTransaction(): PendingTransaction | null {
   const raw = localStorage.getItem(PENDING_KEY);
   if (!raw) return null;
   try {
     const value = JSON.parse(raw) as PendingTransaction;
-    return /^0x[0-9a-fA-F]{64}$/.test(value.hash) && value.method && value.submittedAt ? value : null;
+    const fields = value.expectedFields;
+    const validFields = fields === undefined || (
+      fields !== null && typeof fields === "object" && !Array.isArray(fields)
+      && Object.values(fields).every((item) => typeof item === "string")
+    );
+    return /^0x[0-9a-fA-F]{64}$/.test(value.hash) && value.method && value.submittedAt && validFields ? value : null;
   } catch {
     return null;
   }
@@ -128,22 +168,22 @@ export function assertSuccessfulFinalizedReceipt(receipt: {
   if (receipt.txExecutionResultName !== ExecutionResult.FINISHED_WITH_RETURN) {
     throw new Error(`Leader execution did not succeed (${receipt.txExecutionResultName ?? "UNKNOWN"}).`);
   }
-  if (receipt.resultName && !["AGREE", "MAJORITY_AGREE"].includes(receipt.resultName)) {
-    throw new Error(`Validator consensus did not agree (${receipt.resultName}).`);
+  if (!receipt.resultName || !["AGREE", "MAJORITY_AGREE"].includes(receipt.resultName)) {
+    throw new Error(`Validator consensus did not explicitly agree (${receipt.resultName ?? "MISSING"}).`);
   }
 }
 
 export async function reconcilePending(
-  verifyReadback: (pending: PendingTransaction) => Promise<void>,
+  verifyReadback: (pending: PendingTransaction, receipt: unknown) => Promise<void>,
   report: (progress: TransactionProgress) => void,
 ): Promise<boolean> {
   const pending = loadPendingTransaction();
   if (!pending) return false;
   try {
     report({ stage: "pending", message: "Reconciling the existing transaction before any retry.", hash: pending.hash });
-    await waitForFinalized(pending.hash);
+    const receipt = await waitForFinalized(pending.hash);
     report({ stage: "readback", message: "Execution succeeded. Verifying contract state.", hash: pending.hash });
-    await verifyReadback(pending);
+    await verifyReadback(pending, receipt);
     clearPendingTransaction();
     report({ stage: "success", message: "Recovered transaction verified by authoritative readback.", hash: pending.hash });
     return true;
@@ -159,7 +199,8 @@ export async function submitWrite(
   method: string,
   args: CalldataEncodable[],
   expectedId: string,
-  verifyReadback: () => Promise<void>,
+  expectedFields: StringRecord | undefined,
+  verifyReadback: (receipt: unknown) => Promise<void>,
   report: (progress: TransactionProgress) => void,
 ): Promise<`0x${string}`> {
   if (loadPendingTransaction()) throw new Error("An earlier transaction is unresolved. Reconcile it before submitting another write.");
@@ -171,14 +212,14 @@ export async function submitWrite(
   });
   const hash = await client.writeContract({ address: requireAddress(), functionName: method, args, value: 0n });
   if (!/^0x[0-9a-fA-F]{64}$/.test(hash)) throw new Error("Wallet returned an invalid transaction hash.");
-  const pending: PendingTransaction = { hash, method, expectedId, submittedAt: new Date().toISOString() };
+  const pending: PendingTransaction = { hash, method, expectedId, expectedFields, submittedAt: new Date().toISOString() };
   localStorage.setItem(PENDING_KEY, JSON.stringify(pending));
   report({ stage: "pending", message: "Submitted. Waiting for Studionet finality.", hash });
   try {
-    await waitForFinalized(hash);
+    const receipt = await waitForFinalized(hash);
     report({ stage: "finalized", message: "FINALIZED with successful leader execution.", hash });
     report({ stage: "readback", message: "Verifying the resulting contract state.", hash });
-    await verifyReadback();
+    await verifyReadback(receipt);
     clearPendingTransaction();
     report({ stage: "success", message: "Contract readback matches the requested action.", hash });
     return hash;

@@ -4,8 +4,8 @@ import {
   FileCheck2, Fingerprint, FlaskConical, LoaderCircle, Plus, Search, ShieldCheck, Unplug, Wallet,
 } from "lucide-react";
 import {
-  connectWallet, getProfileCount, loadPendingTransaction, readArtifact, readAssessment,
-  readDecision, readProfile, reconcilePending, submitWrite,
+  assertReadbackFields, connectWallet, loadPendingTransaction, readArtifact, readAssessment,
+  readDecision, readProfile, reconcilePending, returnedArtifactIndex, returnedProfileId, submitWrite,
   type PendingTransaction, type StringRecord, type TransactionProgress,
 } from "./lib/genlayer";
 import { configurationError, contractAddress, STUDIONET_CHAIN_HEX, STUDIONET_EXPLORER_URL } from "./lib/config";
@@ -24,6 +24,23 @@ const emptyArtifact = (): ArtifactDraft => ({
 
 const compact = (address: string) => `${address.slice(0, 6)}…${address.slice(-4)}`;
 const numberField = (record: StringRecord | null, key: string) => Number(record?.[key] ?? 0);
+const canonicalDoi = (value: string) => value.trim().toLowerCase().replace(/^(https?:\/\/doi\.org\/|doi:)/, "");
+
+function artifactReadbackFields(value: ArtifactDraft): StringRecord {
+  const sourceKind = value.sourceKind.trim().toUpperCase();
+  const sourceId = value.sourceId.trim();
+  return {
+    artifact_type: value.artifactType.trim().toUpperCase(),
+    source_kind: sourceKind,
+    canonical_source_id: sourceKind === "DATACITE_DOI" ? canonicalDoi(sourceId) : sourceKind === "GITHUB_COMMIT" ? sourceId.toLowerCase() : sourceId,
+    expected_relationship: value.relationship.trim(),
+    expected_version: value.version.trim(),
+    declared_digest: value.digest.trim().toLowerCase(),
+    license_required: String(value.licenseRequired),
+    restricted_access_allowed: String(value.restrictedAllowed),
+    license_path: value.licensePath.trim().replaceAll("\\", "/"),
+  };
+}
 
 function StatusPill({ value }: { value: string }) {
   const normalized = value || "NOT ASSESSED";
@@ -152,12 +169,17 @@ export default function App() {
   async function createProfile() {
     await run(async () => {
       const signer = requireWallet();
-      const expectedId = `profile-${String((await getProfileCount()) + 1).padStart(6, "0")}`;
-      await submitWrite(signer.wallet, signer.account, "create_profile", [doi, previousId], expectedId, async () => {
-        const result = await readProfile(expectedId);
-        if (result.state !== "DRAFT" || result.authority.toLowerCase() !== signer.account.toLowerCase()) throw new Error("Created profile did not match the signed request.");
+      const expectedFields = {
+        canonical_work_doi: canonicalDoi(doi), previous_profile_id: previousId.trim(),
+        state: "DRAFT", authority: signer.account.toLowerCase(),
+      };
+      let createdId = "";
+      await submitWrite(signer.wallet, signer.account, "create_profile", [doi, previousId], "", expectedFields, async (receipt) => {
+        createdId = returnedProfileId(receipt);
+        const result = await readProfile(createdId);
+        assertReadbackFields({ ...result, authority: (result.authority ?? "").toLowerCase() }, expectedFields);
       }, report);
-      setDraftId(expectedId); setLookupId(expectedId);
+      setDraftId(createdId); setLookupId(createdId);
     });
   }
 
@@ -166,13 +188,14 @@ export default function App() {
       const signer = requireWallet();
       const before = await readProfile(draftId);
       if (before.state !== "DRAFT") throw new Error("The selected profile is not an editable draft.");
-      const index = numberField(before, "artifact_count");
+      const expectedFields = artifactReadbackFields(artifact);
       await submitWrite(signer.wallet, signer.account, "add_artifact", [
         draftId, artifact.artifactType, artifact.sourceKind, artifact.sourceId, artifact.relationship,
         artifact.version, artifact.digest, artifact.licenseRequired, artifact.restrictedAllowed, artifact.licensePath,
-      ], `${draftId}:${index}`, async () => {
+      ], draftId, expectedFields, async (receipt) => {
+        const index = returnedArtifactIndex(receipt);
         const result = await readArtifact(draftId, index);
-        if (!result.canonical_source_id) throw new Error("Artifact was not present in contract readback.");
+        assertReadbackFields(result, { ...expectedFields, artifact_index: String(index) });
       }, report);
       setArtifact(emptyArtifact());
     });
@@ -181,7 +204,7 @@ export default function App() {
   async function activateProfile() {
     await run(async () => {
       const signer = requireWallet();
-      await submitWrite(signer.wallet, signer.account, "activate_profile", [draftId], draftId, async () => {
+      await submitWrite(signer.wallet, signer.account, "activate_profile", [draftId], draftId, undefined, async () => {
         const result = await readProfile(draftId);
         if (result.state !== "ACTIVE") throw new Error("Profile activation was not reflected in contract state.");
       }, report);
@@ -194,7 +217,7 @@ export default function App() {
       const signer = requireWallet();
       const before = await readProfile(assessId);
       const expectedEpoch = numberField(before, "assessment_count") + 1;
-      await submitWrite(signer.wallet, signer.account, "assess_profile", [assessId], `${assessId}:${expectedEpoch}`, async () => {
+      await submitWrite(signer.wallet, signer.account, "assess_profile", [assessId], `${assessId}:${expectedEpoch}`, undefined, async () => {
         const result = await readAssessment(assessId, expectedEpoch);
         if (numberField(result, "epoch") !== expectedEpoch || !result.overall_status) throw new Error("Assessment readback was incomplete.");
       }, report);
@@ -204,12 +227,16 @@ export default function App() {
 
   async function reconcile() {
     await run(async () => {
-      await reconcilePending(async (pending: PendingTransaction) => {
+      await reconcilePending(async (pending: PendingTransaction, receipt: unknown) => {
         if (pending.method === "create_profile") {
-          const result = await readProfile(pending.expectedId); if (result.state !== "DRAFT") throw new Error("Recovered profile readback failed.");
+          if (!pending.expectedFields) throw new Error("Recovered profile expectation was missing.");
+          const id = returnedProfileId(receipt); const result = await readProfile(id);
+          assertReadbackFields({ ...result, authority: (result.authority ?? "").toLowerCase() }, pending.expectedFields);
+          setDraftId(id); setLookupId(id);
         } else if (pending.method === "add_artifact") {
-          const [id, index] = pending.expectedId.split(":"); const result = await readArtifact(id, Number(index));
-          if (!result.canonical_source_id) throw new Error("Recovered artifact readback failed.");
+          if (!pending.expectedFields) throw new Error("Recovered artifact expectation was missing.");
+          const index = returnedArtifactIndex(receipt); const result = await readArtifact(pending.expectedId, index);
+          assertReadbackFields(result, { ...pending.expectedFields, artifact_index: String(index) });
         } else if (pending.method === "activate_profile") {
           const result = await readProfile(pending.expectedId); if (result.state !== "ACTIVE") throw new Error("Recovered activation readback failed.");
         } else if (pending.method === "assess_profile") {

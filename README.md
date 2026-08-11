@@ -27,7 +27,7 @@ A conventional backend is sufficient when a trusted operator owns the source of 
 Writes:
 
 - `create_profile(canonical_work_doi, previous_profile_id)`
-- `add_artifact(profile_id, artifact_type, source_kind, canonical_source_id, expected_relationship, expected_version, declared_digest, license_required, restricted_access_allowed, license_path)`
+- `add_artifact(profile_id, artifact_type, source_kind, canonical_source_id, expected_relationship, expected_version, declared_digest, license_required, restricted_access_allowed, license_path)` → returns the transaction-specific artifact index
 - `activate_profile(profile_id)`
 - `assess_profile(profile_id)`
 - `upgrade(new_code)` — restricted by GenVM to the registered deployment-wallet upgrader
@@ -54,7 +54,7 @@ Downstream systems can use `is_artifact_set_ready` to gate a research registry i
 | Identity | `MATCH`, `MISMATCH`, `UNRESOLVED` |
 | Access | `AVAILABLE`, `RESTRICTED_DISCLOSED`, `MISSING`, `UNRESOLVED` |
 | Version | `ALIGNED`, `SUPERSEDED`, `CONFLICT`, `UNRESOLVED` |
-| License | `DECLARED`, `ABSENT`, `CONFLICT`, `NOT_APPLICABLE` |
+| License | `DECLARED`, `ABSENT`, `CONFLICT`, `NOT_APPLICABLE`, `UNRESOLVED` |
 
 ## Consensus binding
 
@@ -72,7 +72,7 @@ Downstream systems can use `is_artifact_set_ready` to gate a research registry i
 
 - User-provided text and fetched web content are explicitly treated as untrusted evidence, never as prompt instructions.
 - Canonical identifiers, lengths, artifact count, ownership, lifecycle, duplicate sources, and license paths are validated before consensus.
-- Web bodies and license content are bounded. Complete transport failure aborts rather than inventing a result.
+- Web bodies and license content are bounded. Transport failure is constrained to `UNRESOLVED`; unavailable required-license evidence cannot become `ABSENT` or `BLOCKED`, while malformed or non-consensual output writes nothing.
 - The model must return one exact ordered schema. Unknown fields, missing decisions, unsupported enums, reordering, and malformed output fail closed without a state write.
 - An assessment cannot be replayed inside the 60-second minimum interval.
 - The deployment wallet is registered as the native GenVM upgrader. Any upgrade must preserve the declared storage-field order and types; an unauthorized caller cannot replace code.
@@ -80,7 +80,7 @@ Downstream systems can use `is_artifact_set_ready` to gate a research registry i
 
 ## Frontend
 
-The React workbench supports profile inspection, draft creation, artifact registration, activation, and current-evidence assessment. Wallet connection always opens a provider selector; no wallet is selected automatically. Writes require a valid deployed Studionet address, a selected account, transaction finality, successful execution, validator agreement, and matching contract readback.
+The React workbench supports profile inspection, draft creation, artifact registration, activation, and current-evidence assessment. Wallet connection always opens a provider selector; no wallet is selected automatically. Writes require a valid deployed Studionet address, a selected account, transaction finality, successful execution, explicit validator agreement, and matching contract readback. Creation and artifact registration decode their identity from the exact transaction return instead of inferring it from aggregate counters; pending recovery reuses the saved hash and the original expected fields.
 
 Create `frontend/.env.local` only after deployment and set `VITE_GENLAYER_CONTRACT_ADDRESS` to the verified Studionet address. Do not use a guessed or placeholder address.
 
