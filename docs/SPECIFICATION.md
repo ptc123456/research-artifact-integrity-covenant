@@ -58,7 +58,7 @@ Regression is deterministically true when the new status has greater severity th
 2. Validators fetch Crossref work metadata and the exact declared DataCite, Zenodo, or GitHub endpoint. An optional GitHub license path resolves against the exact commit.
 3. All fetched content is bounded and placed inside an explicit untrusted-evidence delimiter.
 4. The model returns only an ordered `decisions` array with exact keys and closed enums.
-5. Contract validation rejects unknown keys, wrong count/order/source identity, unsupported values, malformed output, and any attempt to turn unavailable source or required-license evidence into a substantive negative.
+5. Contract validation rejects unknown keys, wrong count/order/source identity, unsupported values, malformed output, and any attempt to turn transport status `0`, HTTP `429`, or HTTP `500–599` from work, artifact, or required-license evidence into a substantive negative. Exact-object `404/410` preserves the declared missing/absent policy.
 6. `strict_eq` requires exact validator agreement on every consequential field.
 7. Only after consensus does deterministic code derive and store the overall status and regression flag.
 
@@ -85,7 +85,7 @@ Wallet selection uses EIP-6963 announcements plus explicitly enumerated legacy i
 - Frontend contains no contract-address fallback and no automatic wallet choice.
 - Every write requires `FINALIZED`, successful leader execution, validator agreement, and authoritative readback.
 - Pending transaction reconciliation precedes retry.
-- Required-license transport or exact-path unavailability records `UNRESOLVED`; it cannot commit `ABSENT` or `BLOCKED`, and a later successful assessment may recover.
+- Required-license transport status `0`, HTTP `429`, HTTP `500–599`, or exact-path unavailability records `UNRESOLVED`; it cannot commit `ABSENT` or `BLOCKED`, and a later successful assessment may recover.
 - Contract lint and Direct Mode tests pass.
 - The deployment wallet is the sole initial native upgrader; authorized replacement succeeds and unauthorized replacement is rejected.
 - Frontend lint, unit tests, production build, and live responsive inspection pass at 1280×800, 768, 414, 375, and 320 CSS pixels.

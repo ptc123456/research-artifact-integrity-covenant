@@ -72,7 +72,7 @@ Downstream systems can use `is_artifact_set_ready` to gate a research registry i
 
 - User-provided text and fetched web content are explicitly treated as untrusted evidence, never as prompt instructions.
 - Canonical identifiers, lengths, artifact count, ownership, lifecycle, duplicate sources, and license paths are validated before consensus.
-- Web bodies and license content are bounded. Transport failure is constrained to `UNRESOLVED`; unavailable required-license evidence cannot become `ABSENT` or `BLOCKED`, while malformed or non-consensual output writes nothing.
+- Web bodies and license content are bounded. Transport status `0`, HTTP `429`, and HTTP `500–599` are constrained to `UNRESOLVED`; unavailable required-license evidence cannot become `ABSENT` or `BLOCKED`. Exact-object `404/410` retains the documented missing/absent meaning, while malformed or non-consensual output writes nothing.
 - The model must return one exact ordered schema. Unknown fields, missing decisions, unsupported enums, reordering, and malformed output fail closed without a state write.
 - An assessment cannot be replayed inside the 60-second minimum interval.
 - The deployment wallet is registered as the native GenVM upgrader. Any upgrade must preserve the declared storage-field order and types; an unauthorized caller cannot replace code.

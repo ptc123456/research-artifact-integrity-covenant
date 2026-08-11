@@ -108,6 +108,10 @@ def _seconds_between(later: str, earlier: str) -> int:
     return int((later_dt - earlier_dt).total_seconds())
 
 
+def _evidence_unavailable(http_status: int) -> bool:
+    return http_status == 0 or http_status == 429 or 500 <= http_status <= 599
+
+
 def _derive_status(decisions: list[dict[str, str]]) -> str:
     blocked = False
     unresolved = False
@@ -173,14 +177,16 @@ def _validate_decisions(
             raise gl.vm.UserError("Assessment output marks a required license as not applicable.")
         if license_value == "NOT_APPLICABLE" and artifacts[index]["license_path"]:
             raise gl.vm.UserError("Assessment output ignores a declared license path.")
-        if int(evidence[index]["http_status"]) == 0:
+        if _evidence_unavailable(int(evidence[index]["work_http_status"])) and identity != "UNRESOLVED":
+            raise gl.vm.UserError("Unavailable work evidence must leave identity unresolved.")
+        if _evidence_unavailable(int(evidence[index]["http_status"])):
             if (identity, access, version) != ("UNRESOLVED", "UNRESOLVED", "UNRESOLVED"):
                 raise gl.vm.UserError("Unavailable artifact evidence must remain unresolved.")
         license_evidence_unavailable = (
             artifacts[index]["license_required"]
             and (
-                (artifacts[index]["license_path"] and int(evidence[index]["license_http_status"]) == 0)
-                or (not artifacts[index]["license_path"] and int(evidence[index]["http_status"]) == 0)
+                (artifacts[index]["license_path"] and _evidence_unavailable(int(evidence[index]["license_http_status"])))
+                or (not artifacts[index]["license_path"] and _evidence_unavailable(int(evidence[index]["http_status"])))
             )
         )
         if license_evidence_unavailable and license_value != "UNRESOLVED":
@@ -403,6 +409,7 @@ class ResearchArtifactIntegrityCovenant(gl.Contract):
                 evidence.append(
                     {
                         "declaration": artifact,
+                        "work_http_status": work_status,
                         "source_url": url,
                         "http_status": status,
                         "body": body,
@@ -426,12 +433,12 @@ license = DECLARED | ABSENT | CONFLICT | NOT_APPLICABLE | UNRESOLVED
 
 Rules:
 - Preserve each canonical_source_id exactly and preserve input order.
-- HTTP 404/410 for the exact canonical object is MISSING; transport status 0 is UNRESOLVED.
+- HTTP 404/410 for the exact canonical object is MISSING. Transport status 0, HTTP 429, and HTTP 500-599 are unavailable and must remain UNRESOLVED.
 - RESTRICTED_DISCLOSED is allowed only when the source clearly discloses restricted access and the declaration permits it.
 - Compare repository/record/DOI metadata to expected_relationship, expected_version, and declared_digest.
 - A license is DECLARED only when the exact record metadata or exact commit path supplies a declaration; never infer one.
 - Use ABSENT only when a successfully fetched authoritative record omits the required declaration or an exact declared license path returns HTTP 404/410.
-- A transport failure or unavailable required-license source/path is UNRESOLVED, never ABSENT.
+- A transport failure, HTTP 429, or HTTP 500-599 from a required-license source/path is UNRESOLVED, never ABSENT.
 - Use NOT_APPLICABLE only when license_required is false and no license claim is made.
 - If evidence is insufficient, use UNRESOLVED rather than guessing.
 

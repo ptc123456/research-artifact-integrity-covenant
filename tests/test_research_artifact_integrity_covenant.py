@@ -267,6 +267,78 @@ def test_complete_transport_failure_records_only_unresolved(direct_vm, direct_de
     assert contract.get_artifact_decision(profile_id, 1, 0)["license"] == "UNRESOLVED"
 
 
+@pytest.mark.parametrize("transient_status", [429, 503])
+def test_transient_primary_http_is_fail_closed_then_recovers(direct_vm, direct_deploy, transient_status):
+    contract, profile_id = _active_profile(direct_vm, direct_deploy)
+    direct_vm.warp("2026-08-11T00:01:01+00:00")
+    direct_vm.mock_web(r"api\.crossref\.org/works/", {"status": 200, "body": "{}"})
+    direct_vm.mock_web(r"zenodo\.org/api/records/12786010", {"status": transient_status, "body": ""})
+    direct_vm.mock_llm(
+        r"evidence classifier",
+        json.dumps({"decisions": [{
+            "source_id": "12786010", "identity": "MISMATCH", "access": "MISSING",
+            "version": "CONFLICT", "license": "ABSENT",
+        }]}),
+    )
+    with direct_vm.expect_revert("Unavailable artifact evidence must remain unresolved"):
+        contract.assess_profile(profile_id)
+    assert contract.get_profile(profile_id)["assessment_count"] == "0"
+
+    direct_vm.clear_mocks()
+    direct_vm.mock_web(r"api\.crossref\.org/works/", {"status": 200, "body": "{}"})
+    direct_vm.mock_web(r"zenodo\.org/api/records/12786010", {"status": transient_status, "body": ""})
+    direct_vm.mock_llm(
+        r"evidence classifier",
+        json.dumps({"decisions": [{
+            "source_id": "12786010", "identity": "UNRESOLVED", "access": "UNRESOLVED",
+            "version": "UNRESOLVED", "license": "UNRESOLVED",
+        }]}),
+    )
+    contract.assess_profile(profile_id)
+    assert contract.get_current_status(profile_id) == "UNRESOLVED"
+
+    direct_vm.warp("2026-08-11T00:02:02+00:00")
+    direct_vm.clear_mocks()
+    _mock_ready(direct_vm)
+    contract.assess_profile(profile_id)
+    assert contract.get_current_status(profile_id) == "READY"
+
+
+@pytest.mark.parametrize("transient_status", [429, 503])
+def test_transient_license_http_is_fail_closed_then_recovers(direct_vm, direct_deploy, transient_status):
+    contract, profile_id = _active_github_license_profile(direct_vm, direct_deploy)
+    source_id = "genlayerlabs/genlayer-js/0123456789abcdef0123456789abcdef01234567"
+    direct_vm.warp("2026-08-11T00:01:01+00:00")
+
+    def mock_evidence(license_status, license_value):
+        direct_vm.mock_web(r"api\.crossref\.org/works/", {"status": 200, "body": "{}"})
+        direct_vm.mock_web(r"api\.github\.com/repos/genlayerlabs/genlayer-js/commits/", {"status": 200, "body": "{}"})
+        direct_vm.mock_web(r"raw\.githubusercontent\.com/genlayerlabs/genlayer-js/", {"status": license_status, "body": "MIT" if license_status == 200 else ""})
+        direct_vm.mock_llm(
+            r"evidence classifier",
+            json.dumps({"decisions": [{
+                "source_id": source_id, "identity": "MATCH", "access": "AVAILABLE",
+                "version": "ALIGNED", "license": license_value,
+            }]}),
+        )
+
+    mock_evidence(transient_status, "ABSENT")
+    with direct_vm.expect_revert("required-license evidence must remain unresolved"):
+        contract.assess_profile(profile_id)
+    assert contract.get_profile(profile_id)["assessment_count"] == "0"
+
+    direct_vm.clear_mocks()
+    mock_evidence(transient_status, "UNRESOLVED")
+    contract.assess_profile(profile_id)
+    assert contract.get_current_status(profile_id) == "UNRESOLVED"
+
+    direct_vm.warp("2026-08-11T00:02:02+00:00")
+    direct_vm.clear_mocks()
+    mock_evidence(200, "DECLARED")
+    contract.assess_profile(profile_id)
+    assert contract.get_current_status(profile_id) == "READY"
+
+
 def test_malformed_ai_output_rolls_back(direct_vm, direct_deploy):
     contract, profile_id = _active_profile(direct_vm, direct_deploy)
     direct_vm.warp("2026-08-11T00:01:01+00:00")
