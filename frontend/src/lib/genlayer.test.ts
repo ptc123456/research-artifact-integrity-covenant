@@ -18,7 +18,7 @@ describe("transaction acceptance", () => {
 
 const receiptWithReturn = (readable: string) => ({
   statusName: "FINALIZED", txExecutionResultName: "FINISHED_WITH_RETURN", resultName: "MAJORITY_AGREE",
-  consensus_data: { leader_receipt: [{ result: { status: "return", payload: { readable } } }] },
+  consensus_data: { leader_receipt: [{ execution_result: "SUCCESS", result: { status: "return", payload: { readable } } }] },
 });
 
 describe("transaction-specific return reconciliation", () => {
@@ -31,6 +31,20 @@ describe("transaction-specific return reconciliation", () => {
     expect(() => returnedProfileId(receiptWithReturn('"wrong-record"'))).toThrow(/invalid profile ID/);
     expect(() => returnedProfileId({})).toThrow(/return evidence was missing/);
     expect(returnedProfileId({ data: receiptWithReturn('"profile-000008"') })).toBe("profile-000008");
+  });
+
+  it("uses the successful leader when Studionet appends an idle error receipt", () => {
+    const receipt = {
+      status: 7,
+      status_name: "FINALIZED",
+      result_name: "MAJORITY_AGREE",
+      consensus_data: { leader_receipt: [
+        { execution_result: "SUCCESS", result: { status: "return", payload: { readable: '"profile-000002"' } } },
+        { execution_result: "ERROR", vote: "idle", result: { status: "contract_error", payload: "idle" } },
+      ] },
+    };
+    expect(() => assertSuccessfulFinalizedReceipt(receipt)).not.toThrow();
+    expect(returnedProfileId(receipt)).toBe("profile-000002");
   });
 
   it("binds an artifact to its returned index and every submitted field", () => {

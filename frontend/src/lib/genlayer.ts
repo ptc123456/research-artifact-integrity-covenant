@@ -41,13 +41,24 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }
 
-export function transactionReturnValue(receipt: unknown): unknown {
+function successfulLeaderReturn(receipt: unknown): Record<string, unknown> | null {
   const root = asRecord(receipt);
   const data = asRecord(root?.data);
   const consensus = asRecord(root?.consensus_data) ?? asRecord(data?.consensus_data);
   const leaders = consensus?.leader_receipt;
-  if (!Array.isArray(leaders) || leaders.length === 0) throw new Error("Transaction return evidence was missing.");
-  const result = asRecord(asRecord(leaders[leaders.length - 1])?.result);
+  if (!Array.isArray(leaders)) return null;
+  for (let index = leaders.length - 1; index >= 0; index -= 1) {
+    const leader = asRecord(leaders[index]);
+    const result = asRecord(leader?.result);
+    if (leader?.execution_result === "SUCCESS" && result?.status === "return") return leader;
+  }
+  return null;
+}
+
+export function transactionReturnValue(receipt: unknown): unknown {
+  const leader = successfulLeaderReturn(receipt);
+  if (!leader) throw new Error("Transaction return evidence was missing.");
+  const result = asRecord(leader.result);
   const payload = asRecord(result?.payload);
   if (result?.status !== "return" || typeof payload?.readable !== "string") {
     throw new Error("Transaction return evidence was malformed.");
@@ -159,17 +170,23 @@ async function waitForFinalized(hash: `0x${string}`) {
 export function assertSuccessfulFinalizedReceipt(receipt: {
   status?: string | number;
   statusName?: string;
+  status_name?: string;
   txExecutionResultName?: string;
   resultName?: string;
+  result_name?: string;
+  consensus_data?: unknown;
+  data?: unknown;
 }): void {
-  if (receipt.statusName !== TransactionStatus.FINALIZED && receipt.status !== TransactionStatus.FINALIZED && receipt.status !== 7) {
-    throw new Error(`Transaction ended with status ${receipt.statusName ?? receipt.status ?? "UNKNOWN"}.`);
+  const statusName = receipt.statusName ?? receipt.status_name;
+  if (statusName !== TransactionStatus.FINALIZED && receipt.status !== TransactionStatus.FINALIZED && receipt.status !== 7) {
+    throw new Error(`Transaction ended with status ${statusName ?? receipt.status ?? "UNKNOWN"}.`);
   }
-  if (receipt.txExecutionResultName !== ExecutionResult.FINISHED_WITH_RETURN) {
+  if (receipt.txExecutionResultName !== ExecutionResult.FINISHED_WITH_RETURN && !successfulLeaderReturn(receipt)) {
     throw new Error(`Leader execution did not succeed (${receipt.txExecutionResultName ?? "UNKNOWN"}).`);
   }
-  if (!receipt.resultName || !["AGREE", "MAJORITY_AGREE"].includes(receipt.resultName)) {
-    throw new Error(`Validator consensus did not explicitly agree (${receipt.resultName ?? "MISSING"}).`);
+  const resultName = receipt.resultName ?? receipt.result_name;
+  if (!resultName || !["AGREE", "MAJORITY_AGREE"].includes(resultName)) {
+    throw new Error(`Validator consensus did not explicitly agree (${resultName ?? "MISSING"}).`);
   }
 }
 
