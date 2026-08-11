@@ -30,6 +30,7 @@ Writes:
 - `add_artifact(profile_id, artifact_type, source_kind, canonical_source_id, expected_relationship, expected_version, declared_digest, license_required, restricted_access_allowed, license_path)`
 - `activate_profile(profile_id)`
 - `assess_profile(profile_id)`
+- `upgrade(new_code)` — restricted by GenVM to the registered deployment-wallet upgrader
 
 Views:
 
@@ -42,6 +43,7 @@ Views:
 - `is_artifact_set_ready(profile_id)` — compact oracle surface for downstream gates
 - `has_regressed(profile_id)`
 - `get_min_assessment_delay_seconds()`
+- `get_upgrader()`
 
 Downstream systems can use `is_artifact_set_ready` to gate a research registry import, use `get_current_status` to annotate a citation or model registry, or monitor `has_regressed` before continuing a workflow that depends on the artifact package.
 
@@ -73,6 +75,7 @@ Downstream systems can use `is_artifact_set_ready` to gate a research registry i
 - Web bodies and license content are bounded. Complete transport failure aborts rather than inventing a result.
 - The model must return one exact ordered schema. Unknown fields, missing decisions, unsupported enums, reordering, and malformed output fail closed without a state write.
 - An assessment cannot be replayed inside the 60-second minimum interval.
+- The deployment wallet is registered as the native GenVM upgrader. Any upgrade must preserve the declared storage-field order and types; an unauthorized caller cannot replace code.
 - A failed or disagreeing transaction is not considered successful by the frontend and remains subject to reconciliation and authoritative readback.
 
 ## Frontend
@@ -103,6 +106,10 @@ npm run build
 - Public endpoints may be temporarily unavailable; transport uncertainty is not converted into a positive claim.
 - The covenant verifies declared artifact integrity dimensions, not the contents or merit of the research itself.
 - A package holds at most three artifacts to bound validator work and consensus cost.
+
+## Recovery
+
+The contract is intentionally upgradable. The selected external deployment wallet becomes its native GenVM upgrader. If Studio loses local UI state while Studionet remains intact, import the recorded contract address and verify the committed source before any upgrade. If Studionet state is reset, redeploy the exact recorded source, re-run live contract journeys, update the frontend address only after successful readback, and publish new evidence. Upgrades must preserve the existing storage declaration order and types unless a separately reviewed migration is provided.
 
 ## Repository structure
 

@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -50,6 +51,16 @@ def _mock_ready(direct_vm):
             }
         ),
     )
+
+
+def test_only_deployment_wallet_can_upgrade(direct_vm, direct_deploy, direct_bob):
+    contract = _deploy(direct_vm, direct_deploy)
+    source = Path(CONTRACT).read_bytes()
+    assert contract.get_upgrader() != ""
+    contract.upgrade(source)
+    with direct_vm.prank(direct_bob):
+        with direct_vm.expect_revert("Only the registered upgrader"):
+            contract.upgrade(source)
 
 
 def test_draft_authority_and_immutability(direct_vm, direct_deploy, direct_bob):

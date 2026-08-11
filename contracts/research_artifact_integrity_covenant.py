@@ -182,6 +182,7 @@ def _validate_decisions(raw: object, artifacts: list[dict[str, object]]) -> list
 
 class ResearchArtifactIntegrityCovenant(gl.Contract):
     profile_count: u256
+    upgrader: str
     profiles: TreeMap[str, str]
     artifacts: TreeMap[str, str]
     assessments: TreeMap[str, str]
@@ -190,6 +191,21 @@ class ResearchArtifactIntegrityCovenant(gl.Contract):
 
     def __init__(self):
         self.profile_count = u256(0)
+        self.upgrader = gl.message.sender_address.as_hex
+        root = gl.storage.Root.get()
+        root.upgraders.get().append(gl.message.sender_address)
+
+    @gl.public.write
+    def upgrade(self, new_code: bytes) -> None:
+        if gl.message.sender_address.as_hex != self.upgrader:
+            raise gl.vm.UserError("Only the registered upgrader can replace contract code.")
+        code = gl.storage.Root.get().code.get()
+        code.truncate()
+        code.extend(new_code)
+
+    @gl.public.view
+    def get_upgrader(self) -> str:
+        return self.upgrader
 
     @gl.public.write
     def create_profile(self, canonical_work_doi: str, previous_profile_id: str) -> str:

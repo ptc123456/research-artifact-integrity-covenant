@@ -66,7 +66,7 @@ Regression is deterministically true when the new status has greater severity th
 
 Persistent state uses scalar `u256` plus flat JSON strings in typed `TreeMap` collections. Keys are deterministic profile, artifact, assessment, and decision identifiers. Public methods and integration views are listed in the root README.
 
-There is no privileged administrator and no method to overwrite an assessment. Any caller may request an assessment after the interval, but only the profile authority controls draft construction and activation.
+There is no privileged verdict administrator and no method to overwrite an assessment. Any caller may request an assessment after the interval, but only the profile authority controls draft construction and activation. The external wallet used for deployment is registered as the native GenVM upgrader and may replace code through `upgrade(new_code)`; upgrades must preserve storage layout and require a new exact-revision review.
 
 ## Frontend transaction state machine
 
@@ -86,5 +86,6 @@ Wallet selection uses EIP-6963 announcements plus explicitly enumerated legacy i
 - Every write requires `FINALIZED`, successful leader execution, validator agreement, and authoritative readback.
 - Pending transaction reconciliation precedes retry.
 - Contract lint and Direct Mode tests pass.
+- The deployment wallet is the sole initial native upgrader; authorized replacement succeeds and unauthorized replacement is rejected.
 - Frontend lint, unit tests, production build, and live responsive inspection pass at 1280×800, 768, 414, 375, and 320 CSS pixels.
 - Deployment and all live evidence use Studionet only.
