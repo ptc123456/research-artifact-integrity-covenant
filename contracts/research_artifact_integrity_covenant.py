@@ -167,6 +167,8 @@ def _validate_decisions(raw: object, artifacts: list[dict[str, object]]) -> list
             raise gl.vm.UserError("Assessment output permits restricted access against the declaration.")
         if license_value == "NOT_APPLICABLE" and artifacts[index]["license_required"]:
             raise gl.vm.UserError("Assessment output marks a required license as not applicable.")
+        if license_value == "NOT_APPLICABLE" and artifacts[index]["license_path"]:
+            raise gl.vm.UserError("Assessment output ignores a declared license path.")
         validated.append(
             {
                 "source_id": str(source_id),

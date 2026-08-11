@@ -169,6 +169,32 @@ def test_cross_field_decision_conflicts_roll_back(direct_vm, direct_deploy, acce
     assert contract.get_profile(profile_id)["assessment_count"] == "0"
 
 
+def test_declared_license_path_cannot_be_marked_not_applicable(direct_vm, direct_deploy):
+    contract = _deploy(direct_vm, direct_deploy)
+    profile_id = contract.create_profile(DOI, "")
+    contract.add_artifact(
+        profile_id, "CODE", "GITHUB_COMMIT",
+        "genlayerlabs/genlayer-js/0123456789abcdef0123456789abcdef01234567",
+        "SDK implementation for the canonical work", "exact commit", "",
+        False, False, "LICENSE",
+    )
+    contract.activate_profile(profile_id)
+    direct_vm.warp("2026-08-11T00:01:01+00:00")
+    direct_vm.mock_web(r"api\.crossref\.org/works/", {"status": 200, "body": "{}"})
+    direct_vm.mock_web(r"api\.github\.com/repos/genlayerlabs/genlayer-js/commits/", {"status": 200, "body": "{}"})
+    direct_vm.mock_web(r"raw\.githubusercontent\.com/genlayerlabs/genlayer-js/", {"status": 200, "body": "MIT"})
+    direct_vm.mock_llm(
+        r"evidence classifier",
+        json.dumps({"decisions": [{
+            "source_id": "genlayerlabs/genlayer-js/0123456789abcdef0123456789abcdef01234567",
+            "identity": "MATCH", "access": "AVAILABLE", "version": "ALIGNED", "license": "NOT_APPLICABLE",
+        }]}),
+    )
+    with direct_vm.expect_revert("ignores a declared license path"):
+        contract.assess_profile(profile_id)
+    assert contract.get_profile(profile_id)["assessment_count"] == "0"
+
+
 def test_malformed_ai_output_rolls_back(direct_vm, direct_deploy):
     contract, profile_id = _active_profile(direct_vm, direct_deploy)
     direct_vm.warp("2026-08-11T00:01:01+00:00")
