@@ -27,6 +27,7 @@ Upgrade recovery was rehearsed on the isolated Studionet contract `0xdDAc6ab09c2
 | Profile authority | Bind exact Zenodo evidence | `add_artifact` | [`0x26d55d…f53575`](https://explorer-studio.genlayer.com/tx/0x26d55db0698214bd336eefaf49760a5df0c92dfb404c782e37b7b65537f53575) | `FINALIZED`, `MAJORITY_AGREE`, leader `SUCCESS` | exact return index `0`; all submitted fields match; count `1` |
 | Profile authority | Freeze the package | `activate_profile` | [`0xed4f3f…bbb5a4`](https://explorer-studio.genlayer.com/tx/0xed4f3f68578df05bc49349ba06d8932d4992df3fd3723dd592e87ec291bbb5a4) | `FINALIZED`, `MAJORITY_AGREE`; successful execution receipt followed by an idle receipt | `profile-000002` is `ACTIVE`; activation time stored |
 | Any caller (profile authority used) | Assess current public evidence | `assess_profile` | [`0xfc259f…a0b1a1`](https://explorer-studio.genlayer.com/tx/0xfc259fe080ba5fc85624516c26a8c6b389f0b043135d36df48b6900d02a0b1a1) | `FINALIZED`, `MAJORITY_AGREE`, leader `SUCCESS` | epoch `1`; `READY`; oracle `true`; no regression |
+| Connected frontend wallet | Recover assessment after transient RPC failure | `assess_profile` | [`0xbdb4a0…6442b4`](https://explorer-studio.genlayer.com/transactions/0xbdb4a0aec89c08c47dcce9069223156b5049732e468c38b5d0f25bc0646442b4) | `FINALIZED`, `MAJORITY_AGREE`, two leader `SUCCESS` returns | pending hash reconciled without resubmission; epoch `2`; `READY`; exact decision readback; no regression |
 | Isolated upgrader | Replace with exact same reviewed source | `upgrade` | [`0xeecade…f1d4a`](https://explorer-studio.genlayer.com/tx/0xeecade545e64902a988af7f4bb7f3025f99643b7934333d454de4dc4fb3f1d4a) | `FINALIZED`, `MAJORITY_AGREE`, leader `SUCCESS` | exact source and upgrader preserved; profile state preserved |
 | Unauthorized rehearsal wallet | Attempt code replacement | `upgrade` | [`0xca3c75…e8cab9`](https://explorer-studio.genlayer.com/tx/0xca3c758f6324289d669efccd3fc84b059afad002ac5f807d8b319a8097e8cab9) | `FINALIZED`, `MAJORITY_AGREE`, leader rollback | exact source, upgrader, count, and profile unchanged |
 
@@ -34,7 +35,7 @@ The first main-contract profile ID is not used as release evidence because it wa
 
 ## Consensus result
 
-For assessment epoch `1`, the contract stored:
+For assessment epoch `2`, submitted and recovered through the frontend, the contract stored:
 
 - identity: `MATCH`
 - access: `AVAILABLE`
@@ -50,6 +51,8 @@ The evidence sources were Crossref DOI metadata and exact Zenodo record `4923709
 
 The local production-configured frontend used the real main contract address with no fallback. Browser verification loaded `profile-000002` and displayed its exact DOI, lifecycle, artifact, epoch, four decisions, and `READY` result. The wallet action opened a provider-selection dialog and made no automatic connection request. Register and assess workflows were reachable, and disconnected writes remained disabled.
 
+A wallet-connected frontend assessment returned transaction `0xbdb4a0aec89c08c47dcce9069223156b5049732e468c38b5d0f25bc0646442b4`, then the first receipt poll encountered a transient `Failed to fetch` RPC error. The frontend retained the exact pending hash, exposed reconciliation instead of encouraging a duplicate write, and later reached all four UI milestones: signed, finalized, execution succeeded, and readback verified. Independent SDK readback confirmed epoch `2`, `READY`, the exact four artifact decisions, and no regression.
+
 Responsive inspection passed at widths `1280`, `768`, `414`, `375`, and `320` CSS pixels with no horizontal overflow. No browser console errors or warnings were observed during the readback journey.
 
 The live Studionet receipt for activation contained a successful execution receipt followed by an idle/error receipt. The shared frontend parser was corrected to select a successful leader return, recognize the SDK's current snake-case aliases, still require explicit `AGREE` or `MAJORITY_AGREE`, and reject receipts with no successful execution. A captured-shape regression now covers this case.
@@ -61,7 +64,7 @@ Run from the repository root:
 ```powershell
 uv sync --frozen
 .venv\Scripts\python.exe -m pytest tests -q
-.venv\Scripts\genvm-lint.exe check contracts\research_artifact_integrity_covenant.py
+genvm-lint.exe check contracts\research_artifact_integrity_covenant.py
 cd frontend
 npm ci
 npm run lint
