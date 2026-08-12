@@ -6,7 +6,16 @@ The contract does **not** judge scientific correctness, reproducibility, legal v
 
 ## Current status
 
-The contract and frontend are implemented and locally verified. No Studionet deployment has been performed yet, so this revision intentionally contains no contract address or deployment claim.
+The contract is deployed and live-tested on Studionet. The frontend has been verified against the deployed contract, including exact profile, artifact, assessment, and decision readback.
+
+## Studionet deployment
+
+- Contract: [`0xD0bB9C0D436092d7bBB03F2458C60473739923EC`](https://explorer-studio.genlayer.com/address/0xD0bB9C0D436092d7bBB03F2458C60473739923EC)
+- Deployment transaction: [`0x260fb01f6ca25fed38d06ef315beb03c1738f321a7a659edcbfa447c3d4ecf82`](https://explorer-studio.genlayer.com/tx/0x260fb01f6ca25fed38d06ef315beb03c1738f321a7a659edcbfa447c3d4ecf82)
+- Live demo profile: `profile-000002` (`READY`, one verified Zenodo artifact)
+- Network: Studionet, chain ID `61999`
+
+The deployed contract source matches `contracts/research_artifact_integrity_covenant.py` at SHA-256 `0DE27E5118828C8279A45509237C866D417F8823F3DCBD9AE343F2C855CE1972`.
 
 ## Why GenLayer
 
@@ -82,7 +91,7 @@ Downstream systems can use `is_artifact_set_ready` to gate a research registry i
 
 The React workbench supports profile inspection, draft creation, artifact registration, activation, and current-evidence assessment. Wallet connection always opens a provider selector; no wallet is selected automatically. Writes require a valid deployed Studionet address, a selected account, transaction finality, successful execution, explicit validator agreement, and matching contract readback. Creation and artifact registration decode their identity from the exact transaction return instead of inferring it from aggregate counters; pending recovery reuses the saved hash and the original expected fields.
 
-Create `frontend/.env.local` only after deployment and set `VITE_GENLAYER_CONTRACT_ADDRESS` to the verified Studionet address. Do not use a guessed or placeholder address.
+For local development, set `VITE_GENLAYER_CONTRACT_ADDRESS=0xD0bB9C0D436092d7bBB03F2458C60473739923EC` in `frontend/.env.local`. Configure the same verified value in the production hosting environment. Do not use a guessed or placeholder address.
 
 ## Local verification
 
