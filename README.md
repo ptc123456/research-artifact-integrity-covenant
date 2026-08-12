@@ -2,44 +2,68 @@
 
 Research Artifact Integrity Covenant registers versioned research-artifact packages and uses GenLayer consensus to assess whether their public evidence still matches four narrow declarations: identity, access, version alignment, and license disclosure.
 
-The contract does **not** judge scientific correctness, reproducibility, legal validity, intellectual-property ownership, or research quality.
+## Verified links
 
-## Current status
-
-The contract is deployed and live-tested on Studionet. The frontend has been verified against the deployed contract, including exact profile, artifact, assessment, and decision readback.
-
-## Studionet deployment
-
-- Contract: [`0xD0bB9C0D436092d7bBB03F2458C60473739923EC`](https://explorer-studio.genlayer.com/address/0xD0bB9C0D436092d7bBB03F2458C60473739923EC)
+- Studionet contract: [`0xD0bB9C0D436092d7bBB03F2458C60473739923EC`](https://explorer-studio.genlayer.com/address/0xD0bB9C0D436092d7bBB03F2458C60473739923EC)
 - Deployment transaction: [`0x260fb01f6ca25fed38d06ef315beb03c1738f321a7a659edcbfa447c3d4ecf82`](https://explorer-studio.genlayer.com/tx/0x260fb01f6ca25fed38d06ef315beb03c1738f321a7a659edcbfa447c3d4ecf82)
+- Verification package: [`docs/VERIFICATION.md`](docs/VERIFICATION.md)
+- Live application: pending the Vercel release checkpoint
 - Live demo profile: `profile-000002` (`READY`, one verified Zenodo artifact)
-- Network: Studionet, chain ID `61999`
 
-The deployed contract source matches `contracts/research_artifact_integrity_covenant.py` at SHA-256 `0DE27E5118828C8279A45509237C866D417F8823F3DCBD9AE343F2C855CE1972`.
+Network: Studionet, chain ID `61999`. The deployed source matches [`contracts/research_artifact_integrity_covenant.py`](contracts/research_artifact_integrity_covenant.py) at SHA-256 `0DE27E5118828C8279A45509237C866D417F8823F3DCBD9AE343F2C855CE1972`.
 
-## Why GenLayer
+## Trust problem
 
-A DOI, repository commit, or archive record can remain syntactically valid while the evidence it resolves to becomes unavailable, superseded, contradictory, or differently licensed. A single application server should not unilaterally make that consequential classification. GenLayer validators independently fetch the public evidence and reach strict agreement on the exact fields written to contract state.
+A DOI, repository commit, or archive record can remain syntactically valid while the evidence it resolves to becomes unavailable, superseded, contradictory, or differently licensed. Research registries and downstream automation cannot safely rely on one package author or application server to classify those changes unilaterally.
 
-A conventional backend is sufficient when a trusted operator owns the source of truth or when the result has no shared downstream consequence.
+This covenant does **not** judge scientific correctness, reproducibility, legal validity, intellectual-property ownership, or research quality.
 
-## Contract lifecycle
+## Why GenLayer is essential
+
+Validators independently fetch current public evidence from Crossref and the declared artifact source, classify identity, access, version, and license disclosure, and reach strict agreement on the consequential fields written to contract state. The contract deterministically derives the package status from that agreed decision set.
+
+A conventional backend is sufficient when a trusted operator owns the source of truth or when the result has no shared downstream consequence. Here the classification becomes shared, persistent state that other systems can use as a gate, so independent nondeterministic consensus is the core trust mechanism.
+
+## How it works
 
 1. An authority creates a `DRAFT` profile for a canonical work DOI.
 2. The authority registers one to three exact DataCite DOI, Zenodo record, or GitHub commit artifacts.
 3. Activation freezes the package as `ACTIVE`; a later version must name and supersede the current active profile.
 4. After the assessment interval, any caller may request a fresh public-evidence assessment.
 5. Strict validator agreement stores one decision per artifact and deterministically derives `READY`, `DEGRADED`, `UNRESOLVED`, or `BLOCKED`.
+6. A reviewer can inspect the current profile and decisions, while downstream systems can call `is_artifact_set_ready` or `has_regressed`.
 
-## Public API
+## Architecture
+
+```text
+Public evidence sources
+        ↓ validator fetch and classification
+GenLayer Intelligent Contract
+        ↓ authoritative profiles, decisions, and status
+React workbench / downstream read clients
+```
+
+- `contracts/` contains the Intelligent Contract and the only authoritative state transition logic.
+- `frontend/` provides profile inspection, registration, activation, assessment, wallet selection, transaction reconciliation, and exact contract readback. It does not independently classify evidence.
+- `tests/` covers contract invariants and fail-closed evidence behavior.
+- `docs/` contains the approved specification and release verification evidence.
+- Public APIs remain the evidence source of the validator decision; their raw bodies are never treated as application state.
+
+## Intelligent Contract
+
+### Actors and state machine
+
+The profile authority owns draft mutation and activation. Any caller may assess an active profile after the minimum delay. The native GenVM upgrader alone may replace code. Profiles move from `DRAFT` to `ACTIVE`; a successor can supersede an active predecessor. Assessments append epochs without rewriting prior decisions.
+
+### Public API
 
 Writes:
 
 - `create_profile(canonical_work_doi, previous_profile_id)`
-- `add_artifact(profile_id, artifact_type, source_kind, canonical_source_id, expected_relationship, expected_version, declared_digest, license_required, restricted_access_allowed, license_path)` → returns the transaction-specific artifact index
+- `add_artifact(profile_id, artifact_type, source_kind, canonical_source_id, expected_relationship, expected_version, declared_digest, license_required, restricted_access_allowed, license_path)` — returns the transaction-specific artifact index
 - `activate_profile(profile_id)`
 - `assess_profile(profile_id)`
-- `upgrade(new_code)` — restricted by GenVM to the registered deployment-wallet upgrader
+- `upgrade(new_code)` — restricted by GenVM to the registered upgrader
 
 Views:
 
@@ -49,14 +73,12 @@ Views:
 - `get_current_status(profile_id)`
 - `get_assessment(profile_id, epoch)`
 - `get_artifact_decision(profile_id, epoch, artifact_index)`
-- `is_artifact_set_ready(profile_id)` — compact oracle surface for downstream gates
+- `is_artifact_set_ready(profile_id)`
 - `has_regressed(profile_id)`
 - `get_min_assessment_delay_seconds()`
 - `get_upgrader()`
 
-Downstream systems can use `is_artifact_set_ready` to gate a research registry import, use `get_current_status` to annotate a citation or model registry, or monitor `has_regressed` before continuing a workflow that depends on the artifact package.
-
-## Decision vocabulary
+### Decision vocabulary
 
 | Dimension | Values |
 |---|---|
@@ -65,69 +87,83 @@ Downstream systems can use `is_artifact_set_ready` to gate a research registry i
 | Version | `ALIGNED`, `SUPERSEDED`, `CONFLICT`, `UNRESOLVED` |
 | License | `DECLARED`, `ABSENT`, `CONFLICT`, `NOT_APPLICABLE`, `UNRESOLVED` |
 
-## Consensus binding
+### Consensus binding
 
-| Field | Source | Stored | Downstream effect | Validator check | Binding mode | Regression coverage |
-|---|---|---:|---|---|---|---|
-| `source_id` | Canonical declaration | Yes | Decision-to-artifact identity | Exact ID and input order | Strict exact | Reordered/replaced output rejected |
-| `identity` | Public evidence | Yes | Can block package | Enum plus evidence assessment | Strict exact | Malformed/conflicting output rolls back |
-| `access` | Public evidence | Yes | Can degrade or block | Enum plus evidence assessment | Strict exact | Missing/unresolved paths covered |
-| `version` | Public evidence | Yes | Can degrade or block | Enum plus evidence assessment | Strict exact | Conflicting output cannot commit |
-| `license` | Public evidence | Yes | Can block when required | Enum plus declaration rules | Strict exact | Absent/conflicting output covered |
-| `overall_status` | Decision set | Yes | Oracle result | Derived by contract | Deterministic | READY and rollback paths covered |
-| `has_regressed` | Previous/current status | Yes | Downstream warning | Derived by severity order | Deterministic | Successor/assessment state covered |
+| Field | Source | Stored | Downstream effect | Binding mode |
+|---|---|---:|---|---|
+| `source_id` | Canonical declaration | Yes | Decision identity | Strict exact |
+| `identity` | Public evidence | Yes | Can block package | Strict exact |
+| `access` | Public evidence | Yes | Can degrade or block | Strict exact |
+| `version` | Public evidence | Yes | Can degrade or block | Strict exact |
+| `license` | Public evidence | Yes | Can block when required | Strict exact |
+| `overall_status` | Decision set | Yes | Oracle result | Deterministic derivation |
+| `has_regressed` | Previous/current status | Yes | Downstream warning | Deterministic derivation |
 
-## Failure behavior and security boundary
+The model must return one exact ordered schema. Unknown fields, missing decisions, unsupported enums, reordering, malformed output, or non-agreement fail closed without a state write.
 
-- User-provided text and fetched web content are explicitly treated as untrusted evidence, never as prompt instructions.
-- Canonical identifiers, lengths, artifact count, ownership, lifecycle, duplicate sources, and license paths are validated before consensus.
-- Web bodies and license content are bounded. Transport status `0`, HTTP `429`, and HTTP `500–599` are constrained to `UNRESOLVED`; unavailable required-license evidence cannot become `ABSENT` or `BLOCKED`. Exact-object `404/410` retains the documented missing/absent meaning, while malformed or non-consensual output writes nothing.
-- The model must return one exact ordered schema. Unknown fields, missing decisions, unsupported enums, reordering, and malformed output fail closed without a state write.
-- An assessment cannot be replayed inside the 60-second minimum interval.
-- The deployment wallet is registered as the native GenVM upgrader. Any upgrade must preserve the declared storage-field order and types; an unauthorized caller cannot replace code.
-- A failed or disagreeing transaction is not considered successful by the frontend and remains subject to reconciliation and authoritative readback.
+## Transaction lifecycle
 
-## Frontend
+Wallet connection always opens a provider selector; no wallet is selected automatically. A write proceeds through signing, pending, `FINALIZED`, successful leader execution, explicit `AGREE` or `MAJORITY_AGREE`, and authoritative readback. Creation and artifact registration decode their identity from the exact successful transaction return rather than an aggregate counter.
 
-The React workbench supports profile inspection, draft creation, artifact registration, activation, and current-evidence assessment. Wallet connection always opens a provider selector; no wallet is selected automatically. Writes require a valid deployed Studionet address, a selected account, transaction finality, successful execution, explicit validator agreement, and matching contract readback. Creation and artifact registration decode their identity from the exact transaction return instead of inferring it from aggregate counters; pending recovery reuses the saved hash and the original expected fields.
+The frontend saves the submitted hash and expected fields before polling. A transient RPC error leaves that record intact, blocks duplicate submission, and offers reconciliation of the same hash. The record is cleared only after terminal success and exact readback. Disagreement, execution failure, malformed receipts, unknown terminal state, or readback mismatch is shown as an error rather than success.
 
-For local development, set `VITE_GENLAYER_CONTRACT_ADDRESS=0xD0bB9C0D436092d7bBB03F2458C60473739923EC` in `frontend/.env.local`. Configure the same verified value in the production hosting environment. Do not use a guessed or placeholder address.
+## Run locally
 
-## Local verification
+Prerequisites: Python 3.12, Node.js, npm, `uv`, and `genvm-lint`.
 
-Python 3.12 is required.
+Create `frontend/.env.local` with the verified deployment:
+
+```dotenv
+VITE_GENLAYER_CONTRACT_ADDRESS=0xD0bB9C0D436092d7bBB03F2458C60473739923EC
+```
+
+Then run:
 
 ```powershell
-python -m venv .venv
-.venv\Scripts\python.exe -m pip install -e .
-genvm-lint check contracts\research_artifact_integrity_covenant.py
+uv sync --frozen
 .venv\Scripts\python.exe -m pytest tests -q
+genvm-lint.exe check contracts\research_artifact_integrity_covenant.py
 cd frontend
 npm ci
+npm run dev
+```
+
+## Tests and verification
+
+```powershell
+.venv\Scripts\python.exe -m pytest tests -q
+genvm-lint.exe check contracts\research_artifact_integrity_covenant.py
+cd frontend
 npm run lint
 npm test
 npm run build
 ```
 
-## Limitations
+Current reviewed results: 21 contract tests passed; GenVM lint and semantic validation passed; frontend lint passed; 9 frontend tests passed; production build passed. The complete transaction matrix, deployed-source parity, recovery rehearsal, frontend failure recovery, and known notices are recorded in [`docs/VERIFICATION.md`](docs/VERIFICATION.md).
+
+## Deployment and recovery
+
+The frontend production environment must set `VITE_GENLAYER_CONTRACT_ADDRESS` to the verified Studionet address above. No fallback or placeholder address is accepted. Production assets must be inspected after deployment to confirm that the compiled address and RPC target match the reviewed release.
+
+The contract is intentionally upgradable. The selected external deployment wallet is its native GenVM upgrader. If Studio loses local UI state while Studionet remains intact, import the recorded address and verify committed-source parity before any upgrade. If Studionet resets, redeploy the exact reviewed source, repeat the live journeys and readback, then update frontend configuration and release evidence. Storage declaration order and types must remain compatible unless a separately reviewed migration is supplied.
+
+## Security and trust boundaries
+
+- User text and fetched web content are untrusted evidence, never prompt instructions.
+- Canonical identifiers, lengths, artifact count, authority, lifecycle, duplicate sources, and license paths are validated before consensus.
+- Web bodies and license content are bounded. Transport status `0`, HTTP `429`, and HTTP `500–599` become `UNRESOLVED`; unavailable required-license evidence cannot become `ABSENT` or `BLOCKED`.
+- Exact-object `404/410` retains the documented missing/absent meaning. Malformed or non-consensual output writes nothing.
+- An assessment cannot be replayed inside the 60-second minimum interval.
+- Unauthorized callers cannot replace contract code.
+- The frontend treats contract JSON and receipts as untrusted protocol boundaries and projects only validated fields into the UI.
+
+## Known limitations
 
 - Evidence sources are limited to DataCite DOI records, Zenodo records, GitHub exact commits, Crossref work metadata, and an optional exact-commit license path.
-- Public endpoints may be temporarily unavailable; transport uncertainty is not converted into a positive claim.
+- Public endpoints may be temporarily unavailable; transport uncertainty is not converted into a substantive negative claim.
 - The covenant verifies declared artifact integrity dimensions, not the contents or merit of the research itself.
 - A package holds at most three artifacts to bound validator work and consensus cost.
-
-## Recovery
-
-The contract is intentionally upgradable. The selected external deployment wallet becomes its native GenVM upgrader. If Studio loses local UI state while Studionet remains intact, import the recorded contract address and verify the committed source before any upgrade. If Studionet state is reset, redeploy the exact recorded source, re-run live contract journeys, update the frontend address only after successful readback, and publish new evidence. Upgrades must preserve the existing storage declaration order and types unless a separately reviewed migration is provided.
-
-## Repository structure
-
-```text
-contracts/   Intelligent Contract
-tests/       Direct Mode contract tests
-frontend/    React workbench and frontend tests
-docs/        Approved specification and architecture
-```
+- Studionet is a development network and may reset.
 
 ## License
 
