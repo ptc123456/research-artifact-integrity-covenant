@@ -6,6 +6,9 @@
 - Network: GenLayer Studionet (`61999`)
 - Contract: [`0xD0bB9C0D436092d7bBB03F2458C60473739923EC`](https://explorer-studio.genlayer.com/address/0xD0bB9C0D436092d7bBB03F2458C60473739923EC)
 - Deployment transaction: [`0x260fb01f6ca25fed38d06ef315beb03c1738f321a7a659edcbfa447c3d4ecf82`](https://explorer-studio.genlayer.com/tx/0x260fb01f6ca25fed38d06ef315beb03c1738f321a7a659edcbfa447c3d4ecf82)
+- Live web: [research-artifact-integrity-covenan.vercel.app](https://research-artifact-integrity-covenan.vercel.app)
+- Vercel project: `shingg/research-artifact-integrity-covenant`
+- Production deployment: `dpl_2ThFmnjvk7PaJgDyVmk2PbDvqVdk`
 - Deployed contract source commit: `0e0688a7bee5dc71cffa88d468bfb625aae4e9b1`
 - Frontend live-receipt correction commit: `6172c3ccbb8552aadd6c3cbcb6cda99aaa311da0`
 - Deployed source SHA-256: `0DE27E5118828C8279A45509237C866D417F8823F3DCBD9AE343F2C855CE1972`
@@ -56,6 +59,17 @@ A wallet-connected frontend assessment returned transaction `0xbdb4a0aec89c08c47
 Responsive inspection passed at widths `1280`, `768`, `414`, `375`, and `320` CSS pixels with no horizontal overflow. No browser console errors or warnings were observed during the readback journey.
 
 The live Studionet receipt for activation contained a successful execution receipt followed by an idle/error receipt. The shared frontend parser was corrected to select a successful leader return, recognize the SDK's current snake-case aliases, still require explicit `AGREE` or `MAJORITY_AGREE`, and reject receipts with no successful execution. A captured-shape regression now covers this case.
+
+## Production web verification
+
+Vercel production status was `READY` under the selected `shingg` team. The persistent Production environment contains `VITE_GENLAYER_CONTRACT_ADDRESS`, and the compiled JavaScript contains the exact main contract address plus the Studionet RPC. Bradbury text appears only inside the GenLayer SDK's bundled static chain definitions; the application runtime configuration selects Studionet.
+
+The production HTML loaded successfully and its six referenced JavaScript/CSS assets matched the reviewed local production build byte for byte. The primary production asset hashes were:
+
+- `index-BmAPovNO.js`: `EAD16340BC7B568B33B899F132023E31ED69CF53E4E3A84E8AD22EC1B7F66D2F`
+- `index-B36NvsqG.css`: `1C885BBD25481CC40BAE52C95B4A6E434CC63082DA11C7DBEEA6ECB7CDBF9C40`
+
+Live browser readback displayed `profile-000002`, epoch `2`, `ACTIVE`, `READY`, source `4923709`, and `MATCH / AVAILABLE / ALIGNED / DECLARED`. The production wallet action opened an explicit selector stating that no provider is selected automatically. The console contained no warning or error, and widths `1280`, `768`, `414`, `375`, and `320` CSS pixels had no horizontal overflow.
 
 ## Reproducible local checks
 

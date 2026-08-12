@@ -7,6 +7,7 @@ __pycache__/
 .env.*
 !.env.example
 node_modules/
+.vercel/
 dist/
 coverage/
 artifacts/
