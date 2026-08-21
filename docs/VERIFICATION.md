@@ -41,6 +41,7 @@ The main contract was upgraded in transaction `0xcaf5a7e166009e936054c3fc02d1406
 | External proposer wallet | Bind one exact Zenodo artifact | `add_artifact` | [`0x2ce6e6…b66b4`](https://explorer-studio.genlayer.com/tx/0x2ce6e6c63e1c7b789695d98ab5ce01ff74bb9439860f1fe0f8f9487e4aab66b4) | `FINALIZED`, three agree, leader `SUCCESS` | successor artifact count `1`; state hash advanced |
 | External proposer wallet | Attempt unauthorized canonical activation | `activate_profile` | [`0x7625dd…b0805`](https://explorer-studio.genlayer.com/tx/0x7625ddda73c792c773ecbfafd920328fbc660792e91de0972a15e830071b0805) | `FINALIZED`, four agree, expected leader error | predecessor-authority error; state hash unchanged; no canonical mutation |
 | Active predecessor authority | Approve and activate the successor | `activate_profile` | [`0xce09a9…1b027`](https://explorer-studio.genlayer.com/tx/0xce09a9aaafd03dd4745dd29b76131fb94e34db8d9c19520340b8a7dcfe91b027) | `FINALIZED`, three agree, leader `SUCCESS` | `profile-000002` `SUPERSEDED`; `profile-000003` `ACTIVE`; canonical pointer is `profile-000003` |
+| Any caller (predecessor authority used) | Assess the canonical successor | `assess_profile` | [`0x5493ca…bc38`](https://explorer-studio.genlayer.com/tx/0x5493ca9cf06aeb01bbfa454981f42e8358d788283795fcca78810c7b6bb9bc38) | `FINALIZED`, three agree, leader `SUCCESS` | `profile-000003`, epoch `1`, `READY`, no regression, artifact count `1` |
 
 The first main-contract profile ID is not used as release evidence because it was created accidentally from a secondary wallet. The complete verified reviewer journey is `profile-000002`, whose transaction-specific return and exact fields were read back independently.
 
@@ -57,6 +58,8 @@ For assessment epoch `2`, submitted and recovered through the frontend, the cont
 - `has_regressed("profile-000002")`: `false`
 
 The evidence sources were Crossref DOI metadata and exact Zenodo record `4923709`. The contract itself fetched and classified these sources during validator execution; the frontend only renders contract readback.
+
+The current canonical successor `profile-000003` was independently assessed after activation. Epoch `1` finalized as `READY` with no regression and one artifact; its authoritative profile readback records assessment count `1` and current status `READY`.
 
 ## Frontend verification
 

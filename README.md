@@ -8,7 +8,7 @@ Research Artifact Integrity Covenant registers versioned research-artifact packa
 - Deployment transaction: [`0x260fb01f6ca25fed38d06ef315beb03c1738f321a7a659edcbfa447c3d4ecf82`](https://explorer-studio.genlayer.com/tx/0x260fb01f6ca25fed38d06ef315beb03c1738f321a7a659edcbfa447c3d4ecf82)
 - Live application: [research-artifact-integrity-covenan.vercel.app](https://research-artifact-integrity-covenan.vercel.app)
 - Verification package: [`docs/VERIFICATION.md`](docs/VERIFICATION.md)
-- Live demo profile: `profile-000002` (`READY`, one verified Zenodo artifact)
+- Live canonical demo profile: `profile-000003` (`READY`, one verified Zenodo artifact); its predecessor `profile-000002` is retained as `SUPERSEDED`
 
 Network: Studionet, chain ID `61999`. The deployed source matches [`contracts/research_artifact_integrity_covenant.py`](contracts/research_artifact_integrity_covenant.py) at SHA-256 `0DE27E5118828C8279A45509237C866D417F8823F3DCBD9AE343F2C855CE1972`.
 
