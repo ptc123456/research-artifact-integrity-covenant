@@ -21,11 +21,14 @@ A profile identifies one immutable version of an artifact package for a canonica
 
 States: `DRAFT → ACTIVE → SUPERSEDED`.
 
-- Only the creating authority can modify a draft.
+- Creating an initial draft or proposing a successor draft is permissionless.
+- Only the creating authority can modify a draft (such as adding artifacts).
 - A draft must contain one to three artifacts before activation.
+- Initial profile activation is restricted to the draft's creating authority.
+- Successor proposal is permissionless, but canonical succession requires an on-chain activation transaction by the active predecessor profile's authority.
+- Activating a valid successor atomically marks the predecessor `SUPERSEDED`, marks the successor `ACTIVE`, and updates the canonical active profile pointer for that DOI.
+- This mechanism establishes authority continuity across versions; it does not claim external proof that the wallet controls the DOI itself and does not implement off-chain challenge/recovery or DOI-control verification.
 - An active profile is immutable.
-- A successor must reference the active profile for the same DOI.
-- Activating a valid successor atomically supersedes its predecessor.
 
 ### Artifact
 
@@ -66,7 +69,7 @@ Regression is deterministically true when the new status has greater severity th
 
 Persistent state uses scalar `u256` plus flat JSON strings in typed `TreeMap` collections. Keys are deterministic profile, artifact, assessment, and decision identifiers. Public methods and integration views are listed in the root README.
 
-There is no privileged verdict administrator and no method to overwrite an assessment. Any caller may request an assessment after the interval, but only the profile authority controls draft construction and activation. The external wallet used for deployment is registered as the native GenVM upgrader and may replace code through `upgrade(new_code)`; upgrades must preserve storage layout and require a new exact-revision review.
+There is no privileged verdict administrator and no method to overwrite an assessment. Any caller may request an assessment after the interval. Draft construction is controlled by each draft's creator, while activation requires the draft authority for an initial profile or the active predecessor's authority for a successor profile. The external wallet used for deployment is registered as the native GenVM upgrader and may replace code through `upgrade(new_code)`; upgrades must preserve storage layout and require a new exact-revision review.
 
 ## Frontend transaction state machine
 

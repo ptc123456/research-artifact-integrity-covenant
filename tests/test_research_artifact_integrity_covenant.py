@@ -359,3 +359,160 @@ def test_successor_supersedes_only_current_version(direct_vm, direct_deploy):
     assert contract.get_profile(successor_id)["state"] == "ACTIVE"
     with direct_vm.expect_revert("active version exists"):
         contract.create_profile(DOI, "")
+
+
+def test_initial_draft_authority_can_activate_and_non_authority_is_rejected(direct_vm, direct_deploy, direct_alice, direct_bob):
+    contract = _deploy(direct_vm, direct_deploy)
+    with direct_vm.prank(direct_alice):
+        profile_id = contract.create_profile(DOI, "")
+        contract.add_artifact(profile_id, *ARTIFACT_ARGS)
+
+    with direct_vm.prank(direct_bob):
+        with direct_vm.expect_revert("Only the profile authority can activate this draft"):
+            contract.activate_profile(profile_id)
+
+    assert contract.get_profile(profile_id)["state"] == "DRAFT"
+
+    with direct_vm.prank(direct_alice):
+        contract.activate_profile(profile_id)
+
+    assert contract.get_profile(profile_id)["state"] == "ACTIVE"
+
+
+def test_attacker_cannot_activate_successor_proposal(direct_vm, direct_deploy, direct_alice, direct_bob):
+    contract = _deploy(direct_vm, direct_deploy)
+    with direct_vm.prank(direct_alice):
+        p1 = contract.create_profile(DOI, "")
+        contract.add_artifact(p1, *ARTIFACT_ARGS)
+        contract.activate_profile(p1)
+
+    with direct_vm.prank(direct_bob):
+        p2 = contract.create_profile(DOI, p1)
+        contract.add_artifact(p2, *ARTIFACT_ARGS)
+        with direct_vm.expect_revert("Only the active predecessor authority can activate a successor profile"):
+            contract.activate_profile(p2)
+
+    assert contract.get_profile(p1)["state"] == "ACTIVE"
+    assert contract.get_profile(p2)["state"] == "DRAFT"
+
+
+def test_predecessor_authority_can_activate_proposer_successor(direct_vm, direct_deploy, direct_alice, direct_bob):
+    contract = _deploy(direct_vm, direct_deploy)
+    with direct_vm.prank(direct_alice):
+        p1 = contract.create_profile(DOI, "")
+        contract.add_artifact(p1, *ARTIFACT_ARGS)
+        contract.activate_profile(p1)
+
+    assert contract.get_active_profile(DOI) == p1
+
+    with direct_vm.prank(direct_bob):
+        p2 = contract.create_profile(DOI, p1)
+        contract.add_artifact(p2, *ARTIFACT_ARGS)
+
+    with direct_vm.prank(direct_alice):
+        contract.activate_profile(p2)
+
+    assert contract.get_profile(p1)["state"] == "SUPERSEDED"
+    assert contract.get_profile(p2)["state"] == "ACTIVE"
+    assert contract.get_active_profile(DOI) == p2
+
+
+def test_stale_successor_cannot_activate_after_predecessor_superseded(direct_vm, direct_deploy, direct_alice, direct_bob, direct_charlie):
+    contract = _deploy(direct_vm, direct_deploy)
+    with direct_vm.prank(direct_alice):
+        p1 = contract.create_profile(DOI, "")
+        contract.add_artifact(p1, *ARTIFACT_ARGS)
+        contract.activate_profile(p1)
+
+    with direct_vm.prank(direct_bob):
+        p2 = contract.create_profile(DOI, p1)
+        contract.add_artifact(p2, *ARTIFACT_ARGS)
+
+    with direct_vm.prank(direct_charlie):
+        p3 = contract.create_profile(DOI, p1)
+        contract.add_artifact(p3, *ARTIFACT_ARGS)
+
+    with direct_vm.prank(direct_alice):
+        contract.activate_profile(p3)
+
+    assert contract.get_profile(p3)["state"] == "ACTIVE"
+    assert contract.get_profile(p1)["state"] == "SUPERSEDED"
+
+    with direct_vm.prank(direct_alice):
+        with direct_vm.expect_revert("Predecessor profile must be the active version"):
+            contract.activate_profile(p2)
+
+    with direct_vm.prank(direct_bob):
+        with direct_vm.expect_revert("Predecessor profile must be the active version"):
+            contract.activate_profile(p2)
+
+    assert contract.get_profile(p2)["state"] == "DRAFT"
+
+
+def test_unrelated_wallet_cannot_activate_successor(direct_vm, direct_deploy, direct_alice, direct_bob, direct_charlie):
+    contract = _deploy(direct_vm, direct_deploy)
+    with direct_vm.prank(direct_alice):
+        p1 = contract.create_profile(DOI, "")
+        contract.add_artifact(p1, *ARTIFACT_ARGS)
+        contract.activate_profile(p1)
+
+    with direct_vm.prank(direct_bob):
+        p2 = contract.create_profile(DOI, p1)
+        contract.add_artifact(p2, *ARTIFACT_ARGS)
+
+    with direct_vm.prank(direct_charlie):
+        with direct_vm.expect_revert("Only the active predecessor authority can activate a successor profile"):
+            contract.activate_profile(p2)
+
+    assert contract.get_profile(p1)["state"] == "ACTIVE"
+    assert contract.get_profile(p2)["state"] == "DRAFT"
+
+
+def test_same_authority_successor_activates_cleanly(direct_vm, direct_deploy, direct_alice):
+    contract = _deploy(direct_vm, direct_deploy)
+    with direct_vm.prank(direct_alice):
+        p1 = contract.create_profile(DOI, "")
+        contract.add_artifact(p1, *ARTIFACT_ARGS)
+        contract.activate_profile(p1)
+
+        p2 = contract.create_profile(DOI, p1)
+        contract.add_artifact(p2, *ARTIFACT_ARGS)
+        contract.activate_profile(p2)
+
+    assert contract.get_profile(p1)["state"] == "SUPERSEDED"
+    assert contract.get_profile(p2)["state"] == "ACTIVE"
+
+
+def test_failed_authorization_leaves_state_and_pointers_unchanged(direct_vm, direct_deploy, direct_alice, direct_bob, direct_charlie):
+    contract = _deploy(direct_vm, direct_deploy)
+    with direct_vm.prank(direct_alice):
+        p1 = contract.create_profile(DOI, "")
+        contract.add_artifact(p1, *ARTIFACT_ARGS)
+        contract.activate_profile(p1)
+
+    with direct_vm.prank(direct_bob):
+        p2 = contract.create_profile(DOI, p1)
+        contract.add_artifact(p2, *ARTIFACT_ARGS)
+
+    p1_before = contract.get_profile(p1)
+    p2_before = contract.get_profile(p2)
+
+    with direct_vm.prank(direct_bob):
+        with direct_vm.expect_revert("Only the active predecessor authority"):
+            contract.activate_profile(p2)
+
+    with direct_vm.prank(direct_charlie):
+        with direct_vm.expect_revert("Only the active predecessor authority"):
+            contract.activate_profile(p2)
+
+    assert contract.get_profile(p1) == p1_before
+    assert contract.get_profile(p2) == p2_before
+
+    with direct_vm.expect_revert("active version exists"):
+        contract.create_profile(DOI, "")
+
+    with direct_vm.expect_revert("must be the active version"):
+        contract.create_profile(DOI, p2)
+
+    p3 = contract.create_profile(DOI, p1)
+    assert p3 != ""

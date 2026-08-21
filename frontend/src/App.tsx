@@ -4,7 +4,7 @@ import {
   FileCheck2, Fingerprint, FlaskConical, LoaderCircle, Plus, Search, ShieldCheck, Unplug, Wallet,
 } from "lucide-react";
 import {
-  assertReadbackFields, connectWallet, loadPendingTransaction, readArtifact, readAssessment,
+  assertReadbackFields, connectWallet, loadPendingTransaction, readActiveProfile, readArtifact, readAssessment,
   readDecision, readProfile, reconcilePending, returnedArtifactIndex, returnedProfileId, submitWrite,
   type PendingTransaction, type StringRecord, type TransactionProgress,
 } from "./lib/genlayer";
@@ -96,6 +96,12 @@ export default function App() {
   const [draftId, setDraftId] = useState("");
   const [artifact, setArtifact] = useState<ArtifactDraft>(emptyArtifact);
   const [assessId, setAssessId] = useState("");
+
+  const [registerMode, setRegisterMode] = useState<"create" | "approve">("create");
+  const [approveSuccessorId, setApproveSuccessorId] = useState("");
+  const [loadedSuccessor, setLoadedSuccessor] = useState<StringRecord | null>(null);
+  const [loadedPredecessor, setLoadedPredecessor] = useState<StringRecord | null>(null);
+  const [activeProfileForDoi, setActiveProfileForDoi] = useState("");
 
   useEffect(() => discoverWalletProviders(setProviders), []);
   useEffect(() => {
@@ -201,12 +207,109 @@ export default function App() {
     });
   }
 
+  async function loadSuccessorProposal(id = approveSuccessorId) {
+    const normalized = id.trim();
+    if (!normalized) throw new Error("Enter a successor profile ID.");
+    if (!/^profile-[0-9]{6}$/.test(normalized)) {
+      throw new Error("Invalid successor profile ID format (expected profile-XXXXXX).");
+    }
+    const succ = await readProfile(normalized);
+    if (!succ.profile_id) throw new Error("Successor profile not found.");
+    if (succ.state !== "DRAFT") {
+      throw new Error(`Successor profile is ${succ.state}; only DRAFT profiles can be approved.`);
+    }
+    if (!succ.previous_profile_id) {
+      throw new Error("Profile is an initial draft with no predecessor, not a successor proposal.");
+    }
+    if (numberField(succ, "artifact_count") === 0) {
+      throw new Error("Successor draft has no artifacts registered.");
+    }
+
+    const pred = await readProfile(succ.previous_profile_id);
+    if (!pred.profile_id) {
+      throw new Error("Predecessor profile does not exist.");
+    }
+    if (pred.state !== "ACTIVE") {
+      throw new Error(`Predecessor profile is ${pred.state}; predecessor must be ACTIVE.`);
+    }
+    if (canonicalDoi(pred.canonical_work_doi) !== canonicalDoi(succ.canonical_work_doi)) {
+      throw new Error("Predecessor canonical DOI does not match successor DOI.");
+    }
+
+    const activeId = await readActiveProfile(succ.canonical_work_doi);
+    if (activeId !== succ.previous_profile_id) {
+      throw new Error("The predecessor is no longer the active canonical version for this DOI.");
+    }
+
+    setLoadedSuccessor(succ);
+    setLoadedPredecessor(pred);
+    setActiveProfileForDoi(activeId);
+  }
+
+  const isPredecessorAuthority = Boolean(
+    account && loadedPredecessor?.authority &&
+    account.toLowerCase() === loadedPredecessor.authority.toLowerCase()
+  );
+
+  const canApproveProposal = Boolean(
+    canWrite &&
+    loadedSuccessor &&
+    loadedSuccessor.state === "DRAFT" &&
+    loadedSuccessor.previous_profile_id &&
+    numberField(loadedSuccessor, "artifact_count") > 0 &&
+    loadedPredecessor &&
+    loadedPredecessor.state === "ACTIVE" &&
+    canonicalDoi(loadedPredecessor.canonical_work_doi) === canonicalDoi(loadedSuccessor.canonical_work_doi) &&
+    activeProfileForDoi === loadedPredecessor.profile_id &&
+    isPredecessorAuthority
+  );
+
+  async function approveCanonicalSuccessor() {
+    await run(async () => {
+      if (!loadedSuccessor || !loadedPredecessor) throw new Error("No successor proposal loaded.");
+      const signer = requireWallet();
+      const successor = await readProfile(loadedSuccessor.profile_id);
+      const predecessor = await readProfile(loadedPredecessor.profile_id);
+      const activeIdBeforeWrite = await readActiveProfile(successor.canonical_work_doi);
+      if (successor.state !== "DRAFT" || successor.previous_profile_id !== predecessor.profile_id ||
+          predecessor.state !== "ACTIVE" || canonicalDoi(predecessor.canonical_work_doi) !== canonicalDoi(successor.canonical_work_doi) ||
+          activeIdBeforeWrite !== predecessor.profile_id) {
+        throw new Error("Successor approval state changed. Reload the proposal before signing.");
+      }
+      if (signer.account.toLowerCase() !== predecessor.authority.toLowerCase()) {
+        throw new Error("Connected account is not the active predecessor authority.");
+      }
+      const succId = successor.profile_id;
+      const predId = predecessor.profile_id;
+      const workDoi = successor.canonical_work_doi;
+
+      await submitWrite(signer.wallet, signer.account, "activate_profile", [succId], succId, undefined, async () => {
+        const succResult = await readProfile(succId);
+        if (succResult.state !== "ACTIVE") throw new Error("Successor activation was not reflected in contract state.");
+        const predResult = await readProfile(predId);
+        if (predResult.state !== "SUPERSEDED") throw new Error("Predecessor profile was not superseded.");
+        const activeId = await readActiveProfile(workDoi);
+        if (activeId !== succId) throw new Error("Active profile for DOI did not resolve to the successor.");
+      }, report);
+
+      setLookupId(succId);
+      await loadProfile(succId);
+      setView("browse");
+    });
+  }
+
   async function activateProfile() {
     await run(async () => {
       const signer = requireWallet();
       await submitWrite(signer.wallet, signer.account, "activate_profile", [draftId], draftId, undefined, async () => {
         const result = await readProfile(draftId);
         if (result.state !== "ACTIVE") throw new Error("Profile activation was not reflected in contract state.");
+        if (result.previous_profile_id) {
+          const predecessor = await readProfile(result.previous_profile_id);
+          if (predecessor.state !== "SUPERSEDED") throw new Error("Predecessor profile was not superseded.");
+        }
+        const activeId = await readActiveProfile(result.canonical_work_doi);
+        if (activeId !== draftId) throw new Error("Active profile for DOI did not resolve to the successor.");
       }, report);
       setLookupId(draftId); await loadProfile(draftId); setView("browse");
     });
@@ -238,7 +341,14 @@ export default function App() {
           const index = returnedArtifactIndex(receipt); const result = await readArtifact(pending.expectedId, index);
           assertReadbackFields(result, { ...pending.expectedFields, artifact_index: String(index) });
         } else if (pending.method === "activate_profile") {
-          const result = await readProfile(pending.expectedId); if (result.state !== "ACTIVE") throw new Error("Recovered activation readback failed.");
+          const result = await readProfile(pending.expectedId);
+          if (result.state !== "ACTIVE") throw new Error("Recovered activation readback failed.");
+          if (result.previous_profile_id) {
+            const predecessor = await readProfile(result.previous_profile_id);
+            if (predecessor.state !== "SUPERSEDED") throw new Error("Recovered predecessor state was not superseded.");
+          }
+          const activeId = await readActiveProfile(result.canonical_work_doi);
+          if (activeId !== pending.expectedId) throw new Error("Recovered active profile for DOI did not resolve to the activated profile.");
         } else if (pending.method === "assess_profile") {
           const [id, epoch] = pending.expectedId.split(":"); const result = await readAssessment(id, Number(epoch));
           if (!result.overall_status) throw new Error("Recovered assessment readback failed.");
@@ -299,22 +409,122 @@ export default function App() {
           </div>}
 
           {view === "register" && <div className="flow register-flow">
-            <div className="phase"><div className="phase-number">01</div><div className="phase-body"><h3>Create an immutable draft identity</h3><div className="form-grid">
-              <Field label="Canonical work DOI"><input value={doi} onChange={(e) => setDoi(e.target.value)} placeholder="10.1234/example" disabled={Boolean(draftId)} /></Field>
-              <Field label="Previous profile ID" hint="Required only when superseding an active version."><input value={previousId} onChange={(e) => setPreviousId(e.target.value)} placeholder="Optional" disabled={Boolean(draftId)} /></Field>
-            </div><button className="button primary" disabled={!canWrite || Boolean(draftId) || !doi.trim()} onClick={createProfile}>{draftId ? <Check size={17} /> : <Plus size={17} />}{draftId ? draftId : "Create draft"}</button></div></div>
+            <div style={{ display: "flex", gap: ".5rem", marginBottom: "1.5rem", borderBottom: "1px solid var(--line)", paddingBottom: "1rem" }}>
+              <button
+                type="button"
+                className={`button ${registerMode === "create" ? "primary" : "secondary"}`}
+                onClick={() => setRegisterMode("create")}
+              >
+                Propose new draft
+              </button>
+              <button
+                type="button"
+                className={`button ${registerMode === "approve" ? "primary" : "secondary"}`}
+                onClick={() => setRegisterMode("approve")}
+              >
+                Approve existing successor
+              </button>
+            </div>
 
-            <div className={`phase ${!draftId ? "locked" : ""}`}><div className="phase-number">02</div><div className="phase-body"><h3>Add one to three exact artifacts</h3>
-              <div className="form-grid thirds"><Field label="Artifact type"><select value={artifact.artifactType} onChange={(e) => setArtifact({ ...artifact, artifactType: e.target.value })}>{["DATA", "CODE", "PROTOCOL", "MODEL", "SUPPLEMENT"].map(v => <option key={v}>{v}</option>)}</select></Field>
-              <Field label="Source kind"><select value={artifact.sourceKind} onChange={(e) => setArtifact({ ...artifact, sourceKind: e.target.value, licensePath: "" })}>{["DATACITE_DOI", "ZENODO_RECORD", "GITHUB_COMMIT"].map(v => <option key={v}>{v}</option>)}</select></Field>
-              <Field label="Canonical source ID"><input value={artifact.sourceId} onChange={(e) => setArtifact({ ...artifact, sourceId: e.target.value })} placeholder={artifact.sourceKind === "GITHUB_COMMIT" ? "owner/repo/40-char-commit" : "Exact identifier"} /></Field></div>
-              <div className="form-grid"><Field label="Expected relationship"><input value={artifact.relationship} onChange={(e) => setArtifact({ ...artifact, relationship: e.target.value })} placeholder="How this artifact relates to the work" /></Field><Field label="Expected version"><input value={artifact.version} onChange={(e) => setArtifact({ ...artifact, version: e.target.value })} placeholder="Exact expected release or version" /></Field></div>
-              <div className="form-grid"><Field label="Declared digest" hint="Optional canonical or algorithm-prefixed digest."><input value={artifact.digest} onChange={(e) => setArtifact({ ...artifact, digest: e.target.value })} placeholder="sha256:…" /></Field><Field label="License path" hint="GitHub exact commits only."><input value={artifact.licensePath} onChange={(e) => setArtifact({ ...artifact, licensePath: e.target.value })} disabled={artifact.sourceKind !== "GITHUB_COMMIT"} placeholder="LICENSE" /></Field></div>
-              <div className="checks"><label><input type="checkbox" checked={artifact.licenseRequired} onChange={(e) => setArtifact({ ...artifact, licenseRequired: e.target.checked })} /> License declaration required</label><label><input type="checkbox" checked={artifact.restrictedAllowed} onChange={(e) => setArtifact({ ...artifact, restrictedAllowed: e.target.checked })} /> Disclosed restricted access allowed</label></div>
-              <button className="button secondary" disabled={!canWrite || !draftId || !artifact.sourceId || !artifact.relationship || !artifact.version} onClick={addArtifact}><Plus size={17} /> Add artifact</button>
-            </div></div>
+            {registerMode === "create" ? (
+              <>
+                <div className="phase"><div className="phase-number">01</div><div className="phase-body"><h3>Create an immutable draft identity</h3><div className="form-grid">
+                  <Field label="Canonical work DOI"><input value={doi} onChange={(e) => setDoi(e.target.value)} placeholder="10.1234/example" disabled={Boolean(draftId)} /></Field>
+                  <Field label="Previous profile ID" hint="Anyone may propose a successor, but only the predecessor authority can approve it."><input value={previousId} onChange={(e) => setPreviousId(e.target.value)} placeholder="Optional" disabled={Boolean(draftId)} /></Field>
+                </div><button className="button primary" disabled={!canWrite || Boolean(draftId) || !doi.trim()} onClick={createProfile}>{draftId ? <Check size={17} /> : <Plus size={17} />}{draftId ? draftId : "Create draft"}</button></div></div>
 
-            <div className={`phase ${!draftId ? "locked" : ""}`}><div className="phase-number">03</div><div className="phase-body"><h3>Activate the registered set</h3><p>Activation freezes this version. Future changes require a successor profile.</p><button className="button primary" disabled={!canWrite || !draftId} onClick={activateProfile}><ShieldCheck size={17} /> Activate profile</button></div></div>
+                <div className={`phase ${!draftId ? "locked" : ""}`}><div className="phase-number">02</div><div className="phase-body"><h3>Add one to three exact artifacts</h3>
+                  <div className="form-grid thirds"><Field label="Artifact type"><select value={artifact.artifactType} onChange={(e) => setArtifact({ ...artifact, artifactType: e.target.value })}>{["DATA", "CODE", "PROTOCOL", "MODEL", "SUPPLEMENT"].map(v => <option key={v}>{v}</option>)}</select></Field>
+                  <Field label="Source kind"><select value={artifact.sourceKind} onChange={(e) => setArtifact({ ...artifact, sourceKind: e.target.value, licensePath: "" })}>{["DATACITE_DOI", "ZENODO_RECORD", "GITHUB_COMMIT"].map(v => <option key={v}>{v}</option>)}</select></Field>
+                  <Field label="Canonical source ID"><input value={artifact.sourceId} onChange={(e) => setArtifact({ ...artifact, sourceId: e.target.value })} placeholder={artifact.sourceKind === "GITHUB_COMMIT" ? "owner/repo/40-char-commit" : "Exact identifier"} /></Field></div>
+                  <div className="form-grid"><Field label="Expected relationship"><input value={artifact.relationship} onChange={(e) => setArtifact({ ...artifact, relationship: e.target.value })} placeholder="How this artifact relates to the work" /></Field><Field label="Expected version"><input value={artifact.version} onChange={(e) => setArtifact({ ...artifact, version: e.target.value })} placeholder="Exact expected release or version" /></Field></div>
+                  <div className="form-grid"><Field label="Declared digest" hint="Optional canonical or algorithm-prefixed digest."><input value={artifact.digest} onChange={(e) => setArtifact({ ...artifact, digest: e.target.value })} placeholder="sha256:…" /></Field><Field label="License path" hint="GitHub exact commits only."><input value={artifact.licensePath} onChange={(e) => setArtifact({ ...artifact, licensePath: e.target.value })} disabled={artifact.sourceKind !== "GITHUB_COMMIT"} placeholder="LICENSE" /></Field></div>
+                  <div className="checks"><label><input type="checkbox" checked={artifact.licenseRequired} onChange={(e) => setArtifact({ ...artifact, licenseRequired: e.target.checked })} /> License declaration required</label><label><input type="checkbox" checked={artifact.restrictedAllowed} onChange={(e) => setArtifact({ ...artifact, restrictedAllowed: e.target.checked })} /> Disclosed restricted access allowed</label></div>
+                  <button className="button secondary" disabled={!canWrite || !draftId || !artifact.sourceId || !artifact.relationship || !artifact.version} onClick={addArtifact}><Plus size={17} /> Add artifact</button>
+                </div></div>
+
+                <div className={`phase ${!draftId ? "locked" : ""}`}><div className="phase-number">03</div><div className="phase-body">
+                  <h3>{previousId.trim() ? "Successor proposal ready" : "Activate the registered set"}</h3>
+                  <p>{previousId.trim()
+                    ? "Share this profile ID with the active predecessor authority. They must load it under Approve existing successor before it can become canonical."
+                    : "Initial profile activation freezes this version. Only the creating draft authority can activate it."}</p>
+                  {previousId.trim()
+                    ? <button className="button secondary" disabled={!draftId} onClick={() => { setApproveSuccessorId(draftId); setLoadedSuccessor(null); setLoadedPredecessor(null); setActiveProfileForDoi(""); setRegisterMode("approve"); }}><ShieldCheck size={17} /> Open approval workflow</button>
+                    : <button className="button primary" disabled={!canWrite || !draftId} onClick={activateProfile}><ShieldCheck size={17} /> Activate profile</button>}
+                </div></div>
+              </>
+            ) : (
+              <div>
+                <form className="lookup" onSubmit={(e) => { e.preventDefault(); void run(() => loadSuccessorProposal(approveSuccessorId)); }}>
+                  <Field label="Successor profile ID" hint="Enter an existing successor proposal ID to inspect and approve.">
+                    <input
+                      value={approveSuccessorId}
+                      onChange={(e) => { setApproveSuccessorId(e.target.value); setLoadedSuccessor(null); setLoadedPredecessor(null); setActiveProfileForDoi(""); }}
+                      placeholder="profile-000002"
+                    />
+                  </Field>
+                  <button className="button primary" type="submit" disabled={!contractAddress || busy || !approveSuccessorId.trim()}>
+                    {busy ? <LoaderCircle className="spin" size={17} /> : <Search size={17} />} Load proposal
+                  </button>
+                </form>
+
+                {!loadedSuccessor || !loadedPredecessor ? (
+                  <div className="empty-state">
+                    <ShieldCheck size={28} />
+                    <h3>No successor proposal loaded</h3>
+                    <p>Enter an existing successor profile ID to inspect its predecessor, canonical DOI, and approve it as the active predecessor authority.</p>
+                  </div>
+                ) : (
+                  <div className="record">
+                    <div className="record-title">
+                      <div>
+                        <span className="mono">Successor: {loadedSuccessor.profile_id}</span>
+                        <h3>{loadedSuccessor.canonical_work_doi}</h3>
+                      </div>
+                      <StatusPill value={loadedSuccessor.state} />
+                    </div>
+                    <dl className="facts">
+                      <div>
+                        <dt>Successor Authority</dt>
+                        <dd className="mono">{compact(loadedSuccessor.authority)}</dd>
+                      </div>
+                      <div>
+                        <dt>Predecessor Profile</dt>
+                        <dd className="mono">{loadedPredecessor.profile_id} ({loadedPredecessor.state})</dd>
+                      </div>
+                      <div>
+                        <dt>Predecessor Authority</dt>
+                        <dd className="mono">{compact(loadedPredecessor.authority)}</dd>
+                      </div>
+                      <div>
+                        <dt>Active Canonical Pointer</dt>
+                        <dd className="mono">{activeProfileForDoi || "None"}</dd>
+                      </div>
+                    </dl>
+                    <div style={{ marginTop: "1.5rem", padding: "1.25rem", background: "var(--surface-muted)", borderRadius: "var(--radius)", border: "1px solid var(--line)" }}>
+                      {isPredecessorAuthority ? (
+                        <p style={{ margin: "0 0 1rem", color: "var(--success)", fontSize: ".82rem", fontWeight: 600 }}>
+                          <Check size={16} style={{ display: "inline", verticalAlign: "text-bottom", marginRight: ".4rem" }} />
+                          Connected wallet ({compact(account)}) matches the active predecessor authority.
+                        </p>
+                      ) : (
+                        <p style={{ margin: "0 0 1rem", color: "var(--warning)", fontSize: ".82rem", fontWeight: 600 }}>
+                          <AlertTriangle size={16} style={{ display: "inline", verticalAlign: "text-bottom", marginRight: ".4rem" }} />
+                          Connected wallet ({account ? compact(account) : "None"}) does not match the active predecessor authority ({compact(loadedPredecessor.authority)}).
+                        </p>
+                      )}
+                      <button
+                        className="button primary"
+                        disabled={!canApproveProposal || busy}
+                        onClick={() => void approveCanonicalSuccessor()}
+                      >
+                        <ShieldCheck size={17} /> Approve canonical successor
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>}
 
           {view === "assess" && <div className="flow assess-flow"><div className="assessment-copy"><span className="step-label">Intelligent Contract assessment</span><h3>Check the evidence that exists now.</h3><p>Public sources are fetched during consensus. Validators classify only the four declared integrity dimensions, using strict agreement on consequential output.</p>

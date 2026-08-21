@@ -321,24 +321,42 @@ class ResearchArtifactIntegrityCovenant(gl.Contract):
 
     @gl.public.write
     def activate_profile(self, profile_id: str) -> None:
-        profile = self._draft_owned_by_sender(profile_id)
+        normalized_id = _profile_key(profile_id)
+        profile_raw = self.profiles.get(normalized_id, "")
+        if profile_raw == "":
+            raise gl.vm.UserError("Profile does not exist.")
+        profile = json.loads(profile_raw)
+        if profile["state"] != PROFILE_DRAFT:
+            raise gl.vm.UserError("Only a draft profile can be activated.")
         if int(profile["artifact_count"]) == 0:
             raise gl.vm.UserError("Add at least one artifact before activation.")
         work_doi = profile["canonical_work_doi"]
         previous_id = profile["previous_profile_id"]
         active_id = self.active_profile_by_work_digest.get(work_doi, "")
-        if previous_id == "" and active_id != "":
-            raise gl.vm.UserError("An active version appeared; this draft must be recreated as its successor.")
-        if previous_id != "":
+        if previous_id == "":
+            if active_id != "":
+                raise gl.vm.UserError("An active version appeared; this draft must be recreated as its successor.")
+            if profile["authority"] != gl.message.sender_address.as_hex:
+                raise gl.vm.UserError("Only the profile authority can activate this draft.")
+        else:
+            previous_raw = self.profiles.get(previous_id, "")
+            if previous_raw == "":
+                raise gl.vm.UserError("Predecessor profile does not exist.")
+            previous = json.loads(previous_raw)
+            if previous["state"] != PROFILE_ACTIVE:
+                raise gl.vm.UserError("Predecessor profile must be the active version.")
+            if previous["canonical_work_doi"] != work_doi:
+                raise gl.vm.UserError("Predecessor profile must be for the same canonical DOI.")
             if active_id != previous_id:
                 raise gl.vm.UserError("The predecessor is no longer the active version.")
-            previous = json.loads(self.profiles[previous_id])
+            if previous["authority"] != gl.message.sender_address.as_hex:
+                raise gl.vm.UserError("Only the active predecessor authority can activate a successor profile.")
             previous["state"] = PROFILE_SUPERSEDED
             self.profiles[previous_id] = json.dumps(previous, separators=(",", ":"), sort_keys=True)
         profile["state"] = PROFILE_ACTIVE
         profile["activated_at"] = _now_iso()
-        self.profiles[profile_id] = json.dumps(profile, separators=(",", ":"), sort_keys=True)
-        self.active_profile_by_work_digest[work_doi] = profile_id
+        self.profiles[normalized_id] = json.dumps(profile, separators=(",", ":"), sort_keys=True)
+        self.active_profile_by_work_digest[work_doi] = normalized_id
 
     @gl.public.write
     def assess_profile(self, profile_id: str) -> None:
@@ -534,6 +552,10 @@ EVIDENCE_JSON_BEGIN
     @gl.public.view
     def get_min_assessment_delay_seconds(self) -> u256:
         return u256(MIN_ASSESSMENT_DELAY_SECONDS)
+
+    @gl.public.view
+    def get_active_profile(self, canonical_work_doi: str) -> str:
+        return self.active_profile_by_work_digest.get(_canonical_doi(canonical_work_doi), "")
 
     def _draft_owned_by_sender(self, profile_id: str) -> dict[str, object]:
         normalized_id = _profile_key(profile_id)

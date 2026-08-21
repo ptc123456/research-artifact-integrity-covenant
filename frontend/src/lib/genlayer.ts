@@ -99,6 +99,14 @@ export async function readArtifact(profileId: string, index: number): Promise<St
   return asStringRecord(value, "Artifact readback");
 }
 
+export async function readActiveProfile(canonicalWorkDoi: string): Promise<string> {
+  const value = await readClient.readContract({ address: requireAddress(), functionName: "get_active_profile", args: [canonicalWorkDoi] });
+  if (typeof value !== "string" || (value !== "" && !/^profile-[0-9]{6}$/.test(value))) {
+    throw new Error("get_active_profile returned an invalid profile ID.");
+  }
+  return value;
+}
+
 export async function readAssessment(profileId: string, epoch: number): Promise<StringRecord> {
   const value = await readClient.readContract({ address: requireAddress(), functionName: "get_assessment", args: [profileId, BigInt(epoch)] });
   return asStringRecord(value, "Assessment readback");

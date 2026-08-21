@@ -26,12 +26,12 @@ A conventional backend is sufficient when a trusted operator owns the source of 
 
 ## How it works
 
-1. An authority creates a `DRAFT` profile for a canonical work DOI.
-2. The authority registers one to three exact DataCite DOI, Zenodo record, or GitHub commit artifacts.
-3. Activation freezes the package as `ACTIVE`; a later version must name and supersede the current active profile.
+1. Any wallet may create a `DRAFT` profile for a canonical work DOI (an initial profile or a successor proposal naming the active profile).
+2. The draft creator registers one to three exact DataCite DOI, Zenodo record, or GitHub commit artifacts.
+3. Activation freezes the package as `ACTIVE`. Initial drafts are activated by their creator. Successor proposals are permissionless to create, but canonical succession requires explicit activation by the active predecessor authority, atomically superseding the predecessor and advancing the canonical pointer. This ensures on-chain authority continuity rather than proving off-chain DOI control.
 4. After the assessment interval, any caller may request a fresh public-evidence assessment.
 5. Strict validator agreement stores one decision per artifact and deterministically derives `READY`, `DEGRADED`, `UNRESOLVED`, or `BLOCKED`.
-6. A reviewer can inspect the current profile and decisions, while downstream systems can call `is_artifact_set_ready` or `has_regressed`.
+6. A reviewer can inspect the current profile and decisions, while downstream systems can call `is_artifact_set_ready`, `has_regressed`, or `get_active_profile`.
 
 ## Architecture
 
@@ -53,7 +53,7 @@ React workbench / downstream read clients
 
 ### Actors and state machine
 
-The profile authority owns draft mutation and activation. Any caller may assess an active profile after the minimum delay. The native GenVM upgrader alone may replace code. Profiles move from `DRAFT` to `ACTIVE`; a successor can supersede an active predecessor. Assessments append epochs without rewriting prior decisions.
+A draft creator controls their draft's mutation. For an initial profile, the draft creator activates it. For a successor profile, creating and populating the draft is a permissionless proposal, while canonical succession requires an on-chain activation transaction by the active predecessor's authority, which atomically supersedes the predecessor and updates the canonical active pointer. This provides on-chain authority continuity without claiming off-chain DOI ownership proof or challenge-recovery mechanisms. Any caller may assess an active profile after the minimum delay. The native GenVM upgrader alone may replace code. Profiles move from `DRAFT` to `ACTIVE`; a successor atomically supersedes an active predecessor. Assessments append epochs without rewriting prior decisions.
 
 ### Public API
 
@@ -76,6 +76,7 @@ Views:
 - `is_artifact_set_ready(profile_id)`
 - `has_regressed(profile_id)`
 - `get_min_assessment_delay_seconds()`
+- `get_active_profile(canonical_work_doi)`
 - `get_upgrader()`
 
 ### Decision vocabulary
