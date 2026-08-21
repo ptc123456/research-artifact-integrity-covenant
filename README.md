@@ -140,7 +140,7 @@ npm test
 npm run build
 ```
 
-Current reviewed results: 21 contract tests passed; GenVM lint and semantic validation passed; frontend lint passed; 9 frontend tests passed; production build passed. The complete transaction matrix, deployed-source parity, recovery rehearsal, frontend failure recovery, and known notices are recorded in [`docs/VERIFICATION.md`](docs/VERIFICATION.md).
+Current reviewed results: 28 contract tests passed; GenVM lint and semantic validation passed; frontend lint passed; 24 frontend tests passed; production build passed. The complete transaction matrix, deployed-source parity, recovery rehearsal, frontend failure recovery, and known notices are recorded in [`docs/VERIFICATION.md`](docs/VERIFICATION.md).
 
 ## Deployment and recovery
 
