@@ -10,6 +10,7 @@ import {
 } from "./lib/genlayer";
 import { configurationError, contractAddress, STUDIONET_CHAIN_HEX, STUDIONET_EXPLORER_URL } from "./lib/config";
 import { discoverWalletProviders, type WalletProviderDetail } from "./lib/walletProviders";
+import metamaskFox from "./assets/metamask-fox.svg";
 
 type View = "browse" | "register" | "assess";
 type ArtifactDraft = {
@@ -25,6 +26,7 @@ const emptyArtifact = (): ArtifactDraft => ({
 const compact = (address: string) => `${address.slice(0, 6)}…${address.slice(-4)}`;
 const numberField = (record: StringRecord | null, key: string) => Number(record?.[key] ?? 0);
 const canonicalDoi = (value: string) => value.trim().toLowerCase().replace(/^(https?:\/\/doi\.org\/|doi:)/, "");
+const walletIcon = (item: WalletProviderDetail) => item.info.icon ?? (item.info.name === "MetaMask" ? metamaskFox : null);
 
 function artifactReadbackFields(value: ArtifactDraft): StringRecord {
   const sourceKind = value.sourceKind.trim().toUpperCase();
@@ -357,7 +359,8 @@ export default function App() {
     });
   }
 
-  const navigate = (next: View) => { setView(next); commandDialog.current?.close(); window.scrollTo({ top: 0, behavior: "smooth" }); };
+  const selectView = (next: View) => { setNotice(null); setView(next); };
+  const navigate = (next: View) => { selectView(next); commandDialog.current?.close(); window.scrollTo({ top: 0, behavior: "smooth" }); };
 
   return <div className="app-shell">
     <header className="site-header">
@@ -365,7 +368,7 @@ export default function App() {
         <Fingerprint size={22} /><span>Research Artifact<br />Integrity Covenant</span>
       </a>
       <nav aria-label="Primary navigation">
-        {(["browse", "register", "assess"] as View[]).map((item) => <button key={item} className={view === item ? "active" : ""} onClick={() => setView(item)}>{item}</button>)}
+        {(["browse", "register", "assess"] as View[]).map((item) => <button key={item} className={view === item ? "active" : ""} onClick={() => selectView(item)}>{item}</button>)}
       </nav>
       <div className="header-actions">
         <span className="network"><i /> Studionet</span>
@@ -540,7 +543,7 @@ export default function App() {
 
     <footer><div><Fingerprint size={19} />Research Artifact Integrity Covenant</div><p>A package is only as clear as its evidence trail.</p><a href="https://docs.genlayer.com" target="_blank" rel="noreferrer">Built on GenLayer <ArrowUpRight size={13} /></a></footer>
 
-    <dialog ref={walletDialog} className="modal" onClick={(e) => { if (e.target === walletDialog.current) walletDialog.current.close(); }}><div className="modal-body"><span className="step-label">Wallet provider</span><h2>Choose how to connect</h2><p>No provider is selected automatically.</p><div className="provider-list">{providers.length ? providers.map((item) => <button key={item.info.uuid} onClick={() => selectWallet(item)}>{item.info.icon ? <img src={item.info.icon} alt="" /> : <Wallet size={20} />}<span><strong>{item.info.name}</strong><small>{item.info.rdns ?? "Injected browser provider"}</small></span><ChevronRight size={18} /></button>) : <div className="empty-provider">No compatible injected wallet was discovered.</div>}</div><button className="text-button" onClick={() => walletDialog.current?.close()}>Cancel</button></div></dialog>
+    <dialog ref={walletDialog} className="modal" onClick={(e) => { if (e.target === walletDialog.current) walletDialog.current.close(); }}><div className="modal-body"><span className="step-label">Wallet provider</span><h2>Choose how to connect</h2><p>No provider is selected automatically.</p><div className="provider-list">{providers.length ? providers.map((item) => { const icon = walletIcon(item); return <button key={item.info.uuid} onClick={() => selectWallet(item)}>{icon ? <img src={icon} alt="" /> : <Wallet size={20} />}<span><strong>{item.info.name}</strong><small>{item.info.rdns ?? "Injected browser provider"}</small></span><ChevronRight size={18} /></button>; }) : <div className="empty-provider">No compatible injected wallet was discovered.</div>}</div><button className="text-button" onClick={() => walletDialog.current?.close()}>Cancel</button></div></dialog>
 
     <dialog ref={commandDialog} className="modal command-modal"><div className="modal-body"><span className="step-label">Navigate</span><h2>Jump to a workflow</h2><div className="command-list">{(["browse", "register", "assess"] as View[]).map((item, index) => <button key={item} onClick={() => navigate(item)}><kbd>0{index + 1}</kbd><span><strong>{item}</strong><small>{item === "browse" ? "Inspect profiles and decisions" : item === "register" ? "Create and activate an artifact set" : "Run current-evidence consensus"}</small></span><ChevronRight size={18} /></button>)}</div><button className="text-button" onClick={() => commandDialog.current?.close()}>Close</button></div></dialog>
   </div>;

@@ -71,6 +71,7 @@ describe("unconfigured application", () => {
     expect(screen.getByRole("button", { name: /load profile/i })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: /connect wallet/i }));
     expect(screen.getByRole("dialog")).toHaveTextContent("No provider is selected automatically");
+    expect(screen.getByRole("dialog").querySelector("img")).toBeInTheDocument();
   });
 });
 
@@ -312,6 +313,10 @@ describe("independent approval validation failures", () => {
     await waitFor(() => {
       expect(screen.getByRole("alert")).toHaveTextContent(/only DRAFT profiles can be approved/i);
     });
+
+    const nav = screen.getByRole("navigation", { name: /primary navigation/i });
+    fireEvent.click(within(nav).getByRole("button", { name: /^browse$/i }));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("shows error for initial profile without predecessor", async () => {
