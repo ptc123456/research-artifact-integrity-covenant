@@ -8,9 +8,9 @@
 - Deployment transaction: [`0x260fb01f6ca25fed38d06ef315beb03c1738f321a7a659edcbfa447c3d4ecf82`](https://explorer-studio.genlayer.com/tx/0x260fb01f6ca25fed38d06ef315beb03c1738f321a7a659edcbfa447c3d4ecf82)
 - Live web: [research-artifact-integrity-covenan.vercel.app](https://research-artifact-integrity-covenan.vercel.app)
 - Vercel project: `shingg/research-artifact-integrity-covenant`
-- Production deployment: `dpl_2ThFmnjvk7PaJgDyVmk2PbDvqVdk`
+- Production deployment: `dpl_78mECrKtcsrPh5RvEs5B7zeG8qdR`
 - Current upgraded contract source commit: `03654be58396e0fe12b9fc8054c48314964a65b2`
-- Frontend live-receipt correction commit: `6172c3ccbb8552aadd6c3cbcb6cda99aaa311da0`
+- Final frontend remediation commit: `0aa3306aa3b811931c7a3a9b23e8979471dcb93a`
 - Current deployed source SHA-256: `C9662F97213AEFEA61A2E6B10BF2B5F2CBD2B696898D1232FCA98A15BEAF50CF`
 
 The immutable checkpoint package records the exact package commit and tree after this document is committed. That external binding avoids a self-referential commit hash inside the commit whose identity it would change.
@@ -42,6 +42,14 @@ The main contract was upgraded in transaction `0xcaf5a7e166009e936054c3fc02d1406
 | External proposer wallet | Attempt unauthorized canonical activation | `activate_profile` | [`0x7625dd…b0805`](https://explorer-studio.genlayer.com/tx/0x7625ddda73c792c773ecbfafd920328fbc660792e91de0972a15e830071b0805) | `FINALIZED`, four agree, expected leader error | predecessor-authority error; state hash unchanged; no canonical mutation |
 | Active predecessor authority | Approve and activate the successor | `activate_profile` | [`0xce09a9…1b027`](https://explorer-studio.genlayer.com/tx/0xce09a9aaafd03dd4745dd29b76131fb94e34db8d9c19520340b8a7dcfe91b027) | `FINALIZED`, three agree, leader `SUCCESS` | `profile-000002` `SUPERSEDED`; `profile-000003` `ACTIVE`; canonical pointer is `profile-000003` |
 | Any caller (predecessor authority used) | Assess the canonical successor | `assess_profile` | [`0x5493ca…bc38`](https://explorer-studio.genlayer.com/tx/0x5493ca9cf06aeb01bbfa454981f42e8358d788283795fcca78810c7b6bb9bc38) | `FINALIZED`, three agree, leader `SUCCESS` | `profile-000003`, epoch `1`, `READY`, no regression, artifact count `1` |
+| Browser-wallet proposer | Create a successor whose predecessor authority exists only in Studio | `create_profile` | [`0x94f2f3…c4bdd`](https://explorer-studio.genlayer.com/transactions/0x94f2f3b80b43c99749a4240a2cfaec54157b3ead7266f9ba3fd02678ee8c4bdd) | `FINALIZED`, three agree, leader `SUCCESS` | exact return `profile-000004`; predecessor `profile-000003`; frontend exact readback |
+| Browser-wallet proposer | Bind exact evidence to the successor proposal | `add_artifact` | [`0xd6956d…e5d9e`](https://explorer-studio.genlayer.com/transactions/0xd6956d29fb5877935b1d1fe489dbc44902721692187da4bf8a62c231bede5d9e) | `FINALIZED`, four agree, leader `SUCCESS` | artifact index `0`; exact fields; frontend readback; proposal remains `DRAFT` because its predecessor key is Studio-only |
+| Browser-wallet authority | Create a fresh browser-owned initial profile | `create_profile` | [`0x2f55b9…652a0`](https://explorer-studio.genlayer.com/transactions/0x2f55b9d46639ded496f2d857ac01d1f8d2b40fed7bb4d9bc72b000d79e7652a0) | `FINALIZED`, three agree, leader `SUCCESS` | exact return `profile-000005`; DOI `10.5281/zenodo.4923709`; no predecessor |
+| Browser-wallet authority | Bind exact Zenodo evidence | `add_artifact` | [`0x525ec7…7e5b9`](https://explorer-studio.genlayer.com/transactions/0x525ec77328c07c8ab6fe222e36966aee690b849cea0dc76a4513cafa0707e5b9) | `FINALIZED`, three agree, leader `SUCCESS` | artifact index `0`; exact fields and frontend readback |
+| Browser-wallet authority | Activate the browser-owned initial profile | `activate_profile` | [`0x5a1810…77572`](https://explorer-studio.genlayer.com/tx/0x5a181058da57a69b756db6b01a832efb9dd1137b2c0f21a1fefb5ede36c77572) | `FINALIZED`, three agree, leader `SUCCESS` | `profile-000005` `ACTIVE`; canonical pointer and authority verified |
+| Browser-wallet proposer | Create and populate a successor proposal | `create_profile`, `add_artifact` | [`0x5238fa…30f54`](https://explorer-studio.genlayer.com/transactions/0x5238fafb014b8058b71f9ce98b9480226ea7f70a47ba761403a70b389b130f54), [`0xa329d7…ce69c`](https://explorer-studio.genlayer.com/transactions/0xa329d75f919c6016d45c7fe1386582668533faaa8828f391b137e5d5e26ce69c) | both `FINALIZED`, three agree, leader `SUCCESS` | exact return `profile-000006`; artifact index `0`; predecessor `profile-000005`; exact readbacks |
+| Active browser predecessor authority | Approve the canonical successor | `activate_profile` | [`0x145662…90e82`](https://explorer-studio.genlayer.com/transactions/0x145662384b2b9d36d468da655e002ec6c6c2166da22f9ebc4b7cb66d9cb90e82) | `FINALIZED`, four agree, leader `SUCCESS` | `profile-000006` `ACTIVE`; `profile-000005` superseded; canonical pointer moved; frontend readback verified |
+| Browser wallet | Assess the final canonical profile | `assess_profile` | [`0x795647…a61df`](https://explorer-studio.genlayer.com/transactions/0x7956477ab5d8044cca83a6fa81af2b5df891fd2b29154f474e268ebdf2ca61df) | `FINALIZED`, three agree, leader `SUCCESS` | epoch `1`; `READY`; `MATCH / AVAILABLE / ALIGNED / DECLARED`; frontend readback verified |
 
 The first main-contract profile ID is not used as release evidence because it was created accidentally from a secondary wallet. The complete verified reviewer journey is `profile-000002`, whose transaction-specific return and exact fields were read back independently.
 
@@ -75,12 +83,14 @@ The live Studionet receipt for activation contained a successful execution recei
 
 Vercel production status was `READY` under the selected `shingg` team. The persistent Production environment contains `VITE_GENLAYER_CONTRACT_ADDRESS`, and the compiled JavaScript contains the exact main contract address plus the Studionet RPC. Bradbury text appears only inside the GenLayer SDK's bundled static chain definitions; the application runtime configuration selects Studionet.
 
-The production HTML loaded successfully and its six referenced JavaScript/CSS assets matched the reviewed local production build byte for byte. The primary production asset hashes were:
+The final production HTML loaded successfully from the stable public alias. Its primary JavaScript bundle matched the reviewed local production build byte for byte and contained the exact Studionet contract address. The primary production asset hashes were:
 
-- `index-BmAPovNO.js`: `EAD16340BC7B568B33B899F132023E31ED69CF53E4E3A84E8AD22EC1B7F66D2F`
+- `index-Ybolrzyf.js`: `1D689B4D2E494917CA14F0790C8812F3DBB44C072FAB2D8550BE49D99726B17D`
 - `index-B36NvsqG.css`: `1C885BBD25481CC40BAE52C95B4A6E434CC63082DA11C7DBEEA6ECB7CDBF9C40`
 
-Historical pre-remediation live browser readback displayed `profile-000002`, epoch `2`, `ACTIVE`, `READY`, source `4923709`, and `MATCH / AVAILABLE / ALIGNED / DECLARED`. After the verified successor test, `profile-000002` is `SUPERSEDED` and `profile-000003` is canonical. The frontend must be rebuilt, redeployed, and user-tested against this current state before final review. The earlier production wallet action opened an explicit selector stating that no provider was selected automatically, and the earlier responsive inspection found no horizontal overflow.
+The human user executed the mandatory E2E matrix on this exact final production release. The wallet action displayed the complete detected supported set—Rabby, OKX, and MetaMask—with provider icons and no automatic selection. A legacy MetaMask provider received the bundled official fox fallback icon. A stale approval error cleared when navigating from Register to Browse. The user then executed the complete browser-wallet journey recorded above: initial creation, exact artifact registration, activation, successor creation and registration, predecessor-authorized canonical approval, assessment, and authoritative Browse readback. Every submitted write reached signed, finalized, execution-success, and readback-verified UI milestones. The final displayed state was `profile-000006`, `ACTIVE`, epoch `1`, `READY`, source `4923709`, and `MATCH / AVAILABLE / ALIGNED / DECLARED`.
+
+The same final release also demonstrated the denial branch: while connected as an authority that did not match the active predecessor, the successor facts and canonical pointer loaded correctly and the approval button remained disabled. The separate `profile-000004` proposal remains `DRAFT` because its active predecessor authority is a Studio-only account that cannot sign through an injected browser wallet; no unauthorized canonical mutation occurred.
 
 ## Reproducible local checks
 
