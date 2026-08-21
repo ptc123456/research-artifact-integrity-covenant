@@ -9,9 +9,9 @@
 - Live web: [research-artifact-integrity-covenan.vercel.app](https://research-artifact-integrity-covenan.vercel.app)
 - Vercel project: `shingg/research-artifact-integrity-covenant`
 - Production deployment: `dpl_2ThFmnjvk7PaJgDyVmk2PbDvqVdk`
-- Deployed contract source commit: `0e0688a7bee5dc71cffa88d468bfb625aae4e9b1`
+- Current upgraded contract source commit: `03654be58396e0fe12b9fc8054c48314964a65b2`
 - Frontend live-receipt correction commit: `6172c3ccbb8552aadd6c3cbcb6cda99aaa311da0`
-- Deployed source SHA-256: `0DE27E5118828C8279A45509237C866D417F8823F3DCBD9AE343F2C855CE1972`
+- Current deployed source SHA-256: `C9662F97213AEFEA61A2E6B10BF2B5F2CBD2B696898D1232FCA98A15BEAF50CF`
 
 The immutable checkpoint package records the exact package commit and tree after this document is committed. That external binding avoids a self-referential commit hash inside the commit whose identity it would change.
 
@@ -20,6 +20,8 @@ The immutable checkpoint package records the exact package commit and tree after
 The main deployment finalized with validator agreement and successful leader execution. RPC code readback matched the committed contract bytes, the registered upgrader was `0x277bF20771129ae224042d23b0311C1AC5a9AC1b`, the initial profile count was zero, and the minimum assessment delay was 60 seconds.
 
 Upgrade recovery was rehearsed on the isolated Studionet contract `0xdDAc6ab09c25FfB1F3Fc1BCF964085dB9d7432fc`. The exact approved source bytes were encoded mechanically as Studio `b#<hex>`, reverse-decoded, and rehashed before use. The authorized upgrade finalized with agreement and successful execution while preserving `profile-000001`. An unauthorized caller then produced the expected leader rollback; code, upgrader, count, and profile state remained unchanged. This rehearsal is recovery evidence, not a claim that the main deployment was upgraded.
+
+The main contract was upgraded in transaction `0xcaf5a7e166009e936054c3fc02d140699cc1d307d1c9127f0af3fc3d367dcd0c` by the registered upgrader. It finalized with three agreeing validators and successful leader execution. The leader calldata contained the exact 27,531 reviewed source bytes at SHA-256 `C9662F97213AEFEA61A2E6B10BF2B5F2CBD2B696898D1232FCA98A15BEAF50CF`. Readback preserved profile count `2`, upgrader identity, `profile-000002`, and its canonical pointer before the successor test.
 
 ## Live proof matrix
 
@@ -33,6 +35,12 @@ Upgrade recovery was rehearsed on the isolated Studionet contract `0xdDAc6ab09c2
 | Connected frontend wallet | Recover assessment after transient RPC failure | `assess_profile` | [`0xbdb4a0…6442b4`](https://explorer-studio.genlayer.com/transactions/0xbdb4a0aec89c08c47dcce9069223156b5049732e468c38b5d0f25bc0646442b4) | `FINALIZED`, `MAJORITY_AGREE`, two leader `SUCCESS` returns | pending hash reconciled without resubmission; epoch `2`; `READY`; exact decision readback; no regression |
 | Isolated upgrader | Replace with exact same reviewed source | `upgrade` | [`0xeecade…f1d4a`](https://explorer-studio.genlayer.com/tx/0xeecade545e64902a988af7f4bb7f3025f99643b7934333d454de4dc4fb3f1d4a) | `FINALIZED`, `MAJORITY_AGREE`, leader `SUCCESS` | exact source and upgrader preserved; profile state preserved |
 | Unauthorized rehearsal wallet | Attempt code replacement | `upgrade` | [`0xca3c75…e8cab9`](https://explorer-studio.genlayer.com/tx/0xca3c758f6324289d669efccd3fc84b059afad002ac5f807d8b319a8097e8cab9) | `FINALIZED`, `MAJORITY_AGREE`, leader rollback | exact source, upgrader, count, and profile unchanged |
+| Registered upgrader | Upgrade the main contract to the reviewed remediation | `upgrade` | [`0xcaf5a7…7dcd0c`](https://explorer-studio.genlayer.com/tx/0xcaf5a7e166009e936054c3fc02d140699cc1d307d1c9127f0af3fc3d367dcd0c) | `FINALIZED`, three agree, leader `SUCCESS` | exact reviewed source bytes; upgrader and two existing profiles preserved |
+| External proposer wallet | Create a successor proposal | `create_profile` | [`0x726a77…92451`](https://explorer-studio.genlayer.com/tx/0x726a77efdb6e1e6ca363072040d9d7afb20bf802b4001bbb0382b7b54ec92451) | `FINALIZED`, three agree, leader `SUCCESS` | exact return `profile-000003`; authority is proposer; predecessor is `profile-000002` |
+| Predecessor authority, wrong draft owner | Attempt to modify the proposer draft | `add_artifact` | [`0xf7995d…141be`](https://explorer-studio.genlayer.com/tx/0xf7995d1929d82ddbe0344ce0b665e0e2399a9cd34990871b9b07bb99261141be) | `FINALIZED`, three agree, expected leader error | `Only the profile authority can change this draft`; no state mutation |
+| External proposer wallet | Bind one exact Zenodo artifact | `add_artifact` | [`0x2ce6e6…b66b4`](https://explorer-studio.genlayer.com/tx/0x2ce6e6c63e1c7b789695d98ab5ce01ff74bb9439860f1fe0f8f9487e4aab66b4) | `FINALIZED`, three agree, leader `SUCCESS` | successor artifact count `1`; state hash advanced |
+| External proposer wallet | Attempt unauthorized canonical activation | `activate_profile` | [`0x7625dd…b0805`](https://explorer-studio.genlayer.com/tx/0x7625ddda73c792c773ecbfafd920328fbc660792e91de0972a15e830071b0805) | `FINALIZED`, four agree, expected leader error | predecessor-authority error; state hash unchanged; no canonical mutation |
+| Active predecessor authority | Approve and activate the successor | `activate_profile` | [`0xce09a9…1b027`](https://explorer-studio.genlayer.com/tx/0xce09a9aaafd03dd4745dd29b76131fb94e34db8d9c19520340b8a7dcfe91b027) | `FINALIZED`, three agree, leader `SUCCESS` | `profile-000002` `SUPERSEDED`; `profile-000003` `ACTIVE`; canonical pointer is `profile-000003` |
 
 The first main-contract profile ID is not used as release evidence because it was created accidentally from a secondary wallet. The complete verified reviewer journey is `profile-000002`, whose transaction-specific return and exact fields were read back independently.
 
@@ -69,7 +77,7 @@ The production HTML loaded successfully and its six referenced JavaScript/CSS as
 - `index-BmAPovNO.js`: `EAD16340BC7B568B33B899F132023E31ED69CF53E4E3A84E8AD22EC1B7F66D2F`
 - `index-B36NvsqG.css`: `1C885BBD25481CC40BAE52C95B4A6E434CC63082DA11C7DBEEA6ECB7CDBF9C40`
 
-Live browser readback displayed `profile-000002`, epoch `2`, `ACTIVE`, `READY`, source `4923709`, and `MATCH / AVAILABLE / ALIGNED / DECLARED`. The production wallet action opened an explicit selector stating that no provider is selected automatically. The console contained no warning or error, and widths `1280`, `768`, `414`, `375`, and `320` CSS pixels had no horizontal overflow.
+Historical pre-remediation live browser readback displayed `profile-000002`, epoch `2`, `ACTIVE`, `READY`, source `4923709`, and `MATCH / AVAILABLE / ALIGNED / DECLARED`. After the verified successor test, `profile-000002` is `SUPERSEDED` and `profile-000003` is canonical. The frontend must be rebuilt, redeployed, and user-tested against this current state before final review. The earlier production wallet action opened an explicit selector stating that no provider was selected automatically, and the earlier responsive inspection found no horizontal overflow.
 
 ## Reproducible local checks
 
