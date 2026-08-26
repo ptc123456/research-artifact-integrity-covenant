@@ -4,7 +4,7 @@ import {
   FileCheck2, Fingerprint, FlaskConical, LoaderCircle, Plus, Search, ShieldCheck, Unplug, Wallet,
 } from "lucide-react";
 import {
-  assertReadbackFields, connectWallet, loadPendingTransaction, readActiveProfile, readArtifact, readAssessment,
+  assertReadbackFields, cancelRpcActivity, connectWallet, invalidateReadCache, loadPendingTransaction, readActiveProfile, readArtifact, readAssessment,
   readDecision, readProfile, reconcilePending, returnedArtifactIndex, returnedProfileId, submitWrite,
   type PendingTransaction, type StringRecord, type TransactionProgress,
 } from "./lib/genlayer";
@@ -86,6 +86,7 @@ export default function App() {
   const [progress, setProgress] = useState<TransactionProgress | null>(null);
   const walletDialog = useRef<HTMLDialogElement>(null);
   const commandDialog = useRef<HTMLDialogElement>(null);
+  const browseRead = useRef<AbortController | null>(null);
 
   const [lookupId, setLookupId] = useState("");
   const [profile, setProfile] = useState<StringRecord | null>(null);
@@ -111,13 +112,13 @@ export default function App() {
     const accountsChanged = (...args: unknown[]) => {
       const accounts = args[0];
       if (!Array.isArray(accounts) || typeof accounts[0] !== "string") {
-        setAccount(""); setNotice("The selected wallet disconnected its account."); return;
+        cancelRpcActivity(); invalidateReadCache(); setAccount(""); setNotice("The selected wallet disconnected its account."); return;
       }
-      setAccount(accounts[0]);
+      invalidateReadCache(); setAccount(accounts[0]);
     };
     const chainChanged = (...args: unknown[]) => {
       if (String(args[0]).toLowerCase() !== STUDIONET_CHAIN_HEX) {
-        setAccount(""); setNotice("Wallet network changed. Reconnect and select GenLayer Studionet before writing.");
+        cancelRpcActivity(); invalidateReadCache(); setAccount(""); setNotice("Wallet network changed. Reconnect and select GenLayer Studionet before writing.");
       }
     };
     wallet.provider.on("accountsChanged", accountsChanged);
@@ -127,6 +128,7 @@ export default function App() {
       wallet.provider.removeListener?.("chainChanged", chainChanged);
     };
   }, [wallet]);
+  useEffect(() => () => { browseRead.current?.abort(); cancelRpcActivity(); }, []);
   useEffect(() => {
     const listener = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
@@ -153,18 +155,21 @@ export default function App() {
     });
   }
 
-  function disconnect() { setWallet(null); setAccount(""); setProgress(null); }
+  function disconnect() { browseRead.current?.abort(); cancelRpcActivity(); invalidateReadCache(); setWallet(null); setAccount(""); setProgress(null); }
 
   async function loadProfile(id = lookupId) {
+    browseRead.current?.abort();
+    const controller = new AbortController();
+    browseRead.current = controller;
     const normalized = id.trim();
     if (!normalized) throw new Error("Enter a profile ID.");
-    const nextProfile = await readProfile(normalized);
+    const nextProfile = await readProfile(normalized, controller.signal);
     if (!nextProfile.profile_id) throw new Error("Profile not found.");
     const count = numberField(nextProfile, "artifact_count");
     const epoch = numberField(nextProfile, "assessment_count");
-    const nextArtifacts = await Promise.all(Array.from({ length: count }, (_, index) => readArtifact(normalized, index)));
-    const nextAssessment = epoch ? await readAssessment(normalized, epoch) : null;
-    const nextDecisions = epoch ? await Promise.all(Array.from({ length: count }, (_, index) => readDecision(normalized, epoch, index))) : [];
+    const nextArtifacts = await Promise.all(Array.from({ length: count }, (_, index) => readArtifact(normalized, index, controller.signal)));
+    const nextAssessment = epoch ? await readAssessment(normalized, epoch, controller.signal) : null;
+    const nextDecisions = epoch ? await Promise.all(Array.from({ length: count }, (_, index) => readDecision(normalized, epoch, index, controller.signal))) : [];
     setLookupId(normalized); setProfile(nextProfile); setArtifacts(nextArtifacts);
     setAssessment(nextAssessment); setDecisions(nextDecisions);
   }

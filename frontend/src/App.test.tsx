@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import * as genlayer from "./lib/genlayer";
@@ -129,6 +129,22 @@ describe("independent predecessor approval journey from clean page", () => {
       expect(screen.getByRole("button", { name: /0x1111…1111/i })).toBeInTheDocument();
     });
   }
+
+  it("cancels active RPC activity on provider account removal and wrong-network events", async () => {
+    const cancel = vi.spyOn(genlayer, "cancelRpcActivity");
+    render(<App />);
+    await connectPredecessorWallet();
+    const on = mockWallet.provider.on as ReturnType<typeof vi.fn>;
+    const accountHandler = on.mock.calls.find(([event]) => event === "accountsChanged")?.[1];
+    const chainHandler = on.mock.calls.find(([event]) => event === "chainChanged")?.[1];
+    expect(accountHandler).toBeTypeOf("function");
+    expect(chainHandler).toBeTypeOf("function");
+    act(() => accountHandler([]));
+    expect(cancel).toHaveBeenCalledOnce();
+    act(() => chainHandler("0x1"));
+    expect(cancel).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole("alert")).toHaveTextContent(/network changed/i);
+  });
 
   it("accepts an existing successor ID from a clean page without creating a local draft", async () => {
     vi.spyOn(genlayer, "readProfile").mockImplementation(async (id) => {

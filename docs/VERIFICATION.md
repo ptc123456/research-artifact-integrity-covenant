@@ -94,6 +94,23 @@ The same final release also demonstrated the denial branch: while connected as a
 
 ## Reproducible local checks
 
+## Studionet RPC call budget
+
+The shared read boundary was instrumented with `rpcMetrics` and regression spies. Counts below are physical SDK read calls for the current one-artifact demo shape; rerenders add zero calls because reads are event-driven rather than effect-driven.
+
+| Journey | Maximum contract reads | Writes/pollers | Invalidation boundary |
+|---|---:|---:|---|
+| Fresh page / rerender | 0 | 0 | none |
+| Browse `profile-000006` | 4: profile, artifact, assessment, decision | 0 | a new explicit lookup supersedes and aborts the prior lookup |
+| Load successor approval facts | 3: successor, predecessor, canonical pointer | 0 | account/network/disconnect clears safe cache |
+| Create draft | 1 authoritative profile readback | 1 write, 1 bounded finality loop | cache cleared before readback |
+| Add artifact | 2: pre-write profile plus authoritative artifact readback | 1 write, 1 bounded finality loop | cache cleared before readback |
+| Activate initial/successor | at most 3 authoritative profile/pointer reads | 1 write, 1 bounded finality loop | cache cleared before readback |
+| Assess | 2: pre-write profile plus authoritative assessment readback | 1 write, 1 bounded finality loop | cache cleared before readback |
+| Reconcile saved transaction | 1–3 according to saved method | 0 new writes, 1 bounded finality loop | cache cleared before readback |
+
+Identical concurrent reads produce one physical call; a short two-second cache suppresses immediate duplicate safe reads. Transient reads make at most three physical attempts. Writes are never retried. Finality polling performs one SDK receipt request per visible four-second interval, pauses while the page is hidden, and is aborted on disconnect or component teardown.
+
 Run from the repository root:
 
 ```powershell

@@ -24,6 +24,64 @@ export interface PendingTransaction {
 
 const PENDING_KEY = "raic.pending-transaction.v1";
 export const readClient = createClient({ chain: studionet });
+const readInflight = new Map<string, Promise<unknown>>();
+const readCache = new Map<string, { value: unknown; expiresAt: number }>();
+const READ_CACHE_MS = 2_000;
+const MAX_READ_ATTEMPTS = 3;
+export const rpcMetrics = { reads: 0, retries: 0 };
+let activeTransactionWait: AbortController | null = null;
+
+function readKey(method: string, args: readonly unknown[]): string {
+  return `${STUDIONET_CHAIN_HEX}:${contractAddress}:${method}:${JSON.stringify(args, (_, value) => typeof value === "bigint" ? value.toString() : value)}`;
+}
+
+function abortError(): DOMException { return new DOMException("RPC request cancelled.", "AbortError"); }
+
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(abortError());
+    const timer = window.setTimeout(resolve, ms);
+    signal?.addEventListener("abort", () => { window.clearTimeout(timer); reject(abortError()); }, { once: true });
+  });
+}
+
+function isTransientRpcError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /\b429\b|rate.?limit|server busy|failed to fetch|network error|temporar/i.test(message);
+}
+
+async function sharedRead(method: string, args: CalldataEncodable[], signal?: AbortSignal, fresh = false): Promise<unknown> {
+  if (signal?.aborted) throw abortError();
+  const key = readKey(method, args);
+  const cached = readCache.get(key);
+  if (!fresh && cached && cached.expiresAt > Date.now()) return cached.value;
+  const existing = readInflight.get(key);
+  if (existing) return existing;
+  const request = (async () => {
+    for (let attempt = 0; attempt < MAX_READ_ATTEMPTS; attempt += 1) {
+      if (signal?.aborted) throw abortError();
+      try {
+        rpcMetrics.reads += 1;
+        const value = await readClient.readContract({ address: requireAddress(), functionName: method, args });
+        readCache.set(key, { value, expiresAt: Date.now() + READ_CACHE_MS });
+        return value;
+      } catch (error) {
+        if (!isTransientRpcError(error) || attempt === MAX_READ_ATTEMPTS - 1) throw error;
+        rpcMetrics.retries += 1;
+        await delay((2 ** attempt) * 250 + Math.floor(Math.random() * 100), signal);
+      }
+    }
+    throw new Error("Studionet read retry budget exhausted.");
+  })().finally(() => readInflight.delete(key));
+  readInflight.set(key, request);
+  return request;
+}
+
+export function invalidateReadCache(): void { readCache.clear(); }
+export function resetRpcStateForTests(): void {
+  readInflight.clear(); readCache.clear(); rpcMetrics.reads = 0; rpcMetrics.retries = 0;
+}
+export function cancelRpcActivity(): void { activeTransactionWait?.abort(); activeTransactionWait = null; }
 
 function requireAddress(): `0x${string}` {
   if (!contractAddress) throw new Error("Contract not configured with a verified Studionet address.");
@@ -89,31 +147,31 @@ export function assertReadbackFields(actual: StringRecord, expected: StringRecor
   }
 }
 
-export async function readProfile(profileId: string): Promise<StringRecord> {
-  const value = await readClient.readContract({ address: requireAddress(), functionName: "get_profile", args: [profileId] });
+export async function readProfile(profileId: string, signal?: AbortSignal, fresh = false): Promise<StringRecord> {
+  const value = await sharedRead("get_profile", [profileId], signal, fresh);
   return asStringRecord(value, "Profile readback");
 }
 
-export async function readArtifact(profileId: string, index: number): Promise<StringRecord> {
-  const value = await readClient.readContract({ address: requireAddress(), functionName: "get_artifact", args: [profileId, BigInt(index)] });
+export async function readArtifact(profileId: string, index: number, signal?: AbortSignal, fresh = false): Promise<StringRecord> {
+  const value = await sharedRead("get_artifact", [profileId, BigInt(index)], signal, fresh);
   return asStringRecord(value, "Artifact readback");
 }
 
-export async function readActiveProfile(canonicalWorkDoi: string): Promise<string> {
-  const value = await readClient.readContract({ address: requireAddress(), functionName: "get_active_profile", args: [canonicalWorkDoi] });
+export async function readActiveProfile(canonicalWorkDoi: string, signal?: AbortSignal, fresh = false): Promise<string> {
+  const value = await sharedRead("get_active_profile", [canonicalWorkDoi], signal, fresh);
   if (typeof value !== "string" || (value !== "" && !/^profile-[0-9]{6}$/.test(value))) {
     throw new Error("get_active_profile returned an invalid profile ID.");
   }
   return value;
 }
 
-export async function readAssessment(profileId: string, epoch: number): Promise<StringRecord> {
-  const value = await readClient.readContract({ address: requireAddress(), functionName: "get_assessment", args: [profileId, BigInt(epoch)] });
+export async function readAssessment(profileId: string, epoch: number, signal?: AbortSignal, fresh = false): Promise<StringRecord> {
+  const value = await sharedRead("get_assessment", [profileId, BigInt(epoch)], signal, fresh);
   return asStringRecord(value, "Assessment readback");
 }
 
-export async function readDecision(profileId: string, epoch: number, index: number): Promise<StringRecord> {
-  const value = await readClient.readContract({ address: requireAddress(), functionName: "get_artifact_decision", args: [profileId, BigInt(epoch), BigInt(index)] });
+export async function readDecision(profileId: string, epoch: number, index: number, signal?: AbortSignal, fresh = false): Promise<StringRecord> {
+  const value = await sharedRead("get_artifact_decision", [profileId, BigInt(epoch), BigInt(index)], signal, fresh);
   return asStringRecord(value, "Decision readback");
 }
 
@@ -164,15 +222,40 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-async function waitForFinalized(hash: `0x${string}`) {
-  const receipt = await readClient.waitForTransactionReceipt({
-    hash: hash as `0x${string}` & { length: 66 },
-    status: TransactionStatus.FINALIZED,
-    interval: 4_000,
-    retries: 225,
+async function waitUntilVisible(signal: AbortSignal): Promise<void> {
+  if (document.visibilityState !== "hidden") return;
+  await new Promise<void>((resolve, reject) => {
+    const done = () => { document.removeEventListener("visibilitychange", visible); signal.removeEventListener("abort", aborted); };
+    const visible = () => { if (document.visibilityState !== "hidden") { done(); resolve(); } };
+    const aborted = () => { done(); reject(abortError()); };
+    document.addEventListener("visibilitychange", visible);
+    signal.addEventListener("abort", aborted, { once: true });
   });
-  assertSuccessfulFinalizedReceipt(receipt);
-  return receipt;
+}
+
+async function waitForFinalized(hash: `0x${string}`) {
+  cancelRpcActivity();
+  const controller = new AbortController();
+  activeTransactionWait = controller;
+  try {
+    for (let attempt = 0; attempt < 225; attempt += 1) {
+      await waitUntilVisible(controller.signal);
+      try {
+        const receipt = await readClient.waitForTransactionReceipt({
+          hash: hash as `0x${string}` & { length: 66 }, status: TransactionStatus.FINALIZED, interval: 0, retries: 1,
+        });
+        assertSuccessfulFinalizedReceipt(receipt);
+        return receipt;
+      } catch (error) {
+        if (controller.signal.aborted) throw abortError();
+        if (attempt === 224) throw error;
+        await delay(4_000, controller.signal);
+      }
+    }
+    throw new Error("Studionet finality wait budget exhausted.");
+  } finally {
+    if (activeTransactionWait === controller) activeTransactionWait = null;
+  }
 }
 
 export function assertSuccessfulFinalizedReceipt(receipt: {
@@ -207,6 +290,7 @@ export async function reconcilePending(
   try {
     report({ stage: "pending", message: "Reconciling the existing transaction before any retry.", hash: pending.hash });
     const receipt = await waitForFinalized(pending.hash);
+    invalidateReadCache();
     report({ stage: "readback", message: "Execution succeeded. Verifying contract state.", hash: pending.hash });
     await verifyReadback(pending, receipt);
     clearPendingTransaction();
@@ -244,6 +328,7 @@ export async function submitWrite(
     const receipt = await waitForFinalized(hash);
     report({ stage: "finalized", message: "FINALIZED with successful leader execution.", hash });
     report({ stage: "readback", message: "Verifying the resulting contract state.", hash });
+    invalidateReadCache();
     await verifyReadback(receipt);
     clearPendingTransaction();
     report({ stage: "success", message: "Contract readback matches the requested action.", hash });

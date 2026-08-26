@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  assertReadbackFields, assertSuccessfulFinalizedReceipt, connectWallet, readActiveProfile, readClient,
-  reconcilePending, returnedArtifactIndex, returnedProfileId,
+  assertReadbackFields, assertSuccessfulFinalizedReceipt, cancelRpcActivity, connectWallet, readActiveProfile, readClient,
+  invalidateReadCache, readProfile, reconcilePending, resetRpcStateForTests, returnedArtifactIndex, returnedProfileId, rpcMetrics,
 } from "./genlayer";
 import type { WalletProviderDetail } from "./walletProviders";
 
@@ -124,7 +124,7 @@ describe("transaction-specific return reconciliation", () => {
 });
 
 describe("contract queries and active profile resolution", () => {
-  afterEach(() => { vi.restoreAllMocks(); });
+  afterEach(() => { vi.restoreAllMocks(); resetRpcStateForTests(); });
 
   it("reads active profile for DOI when valid", async () => {
     vi.spyOn(readClient, "readContract").mockResolvedValue("profile-000002" as never);
@@ -152,6 +152,81 @@ describe("contract queries and active profile resolution", () => {
 
     vi.spyOn(readClient, "readContract").mockResolvedValue({ id: "profile-000001" } as never);
     await expect(readActiveProfile("10.1234/test")).rejects.toThrow(/invalid profile ID/);
+  });
+});
+
+describe("Studionet RPC budget", () => {
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); resetRpcStateForTests(); });
+
+  it("deduplicates in-flight reads and serves a bounded cache hit", async () => {
+    let resolve!: (value: unknown) => void;
+    const pending = new Promise<unknown>((done) => { resolve = done; });
+    const spy = vi.spyOn(readClient, "readContract").mockReturnValue(pending as never);
+    const first = readProfile("profile-000006");
+    const second = readProfile("profile-000006");
+    resolve({ profile_id: "profile-000006" });
+    await expect(Promise.all([first, second])).resolves.toHaveLength(2);
+    await readProfile("profile-000006");
+    expect(spy).toHaveBeenCalledOnce();
+    expect(rpcMetrics.reads).toBe(1);
+  });
+
+  it("invalidates safe cached reads before authoritative reconciliation", async () => {
+    const spy = vi.spyOn(readClient, "readContract").mockResolvedValue({ profile_id: "profile-000006" } as never);
+    await readProfile("profile-000006");
+    await readProfile("profile-000006");
+    invalidateReadCache();
+    await readProfile("profile-000006");
+    expect(spy).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries rate limits with a bounded budget", async () => {
+    vi.useFakeTimers();
+    const spy = vi.spyOn(readClient, "readContract")
+      .mockRejectedValueOnce(new Error("429 rate limit"))
+      .mockRejectedValueOnce(new Error("Server busy"))
+      .mockResolvedValue({ profile_id: "profile-000006" } as never);
+    const result = readProfile("profile-000006");
+    await vi.runAllTimersAsync();
+    await expect(result).resolves.toMatchObject({ profile_id: "profile-000006" });
+    expect(spy).toHaveBeenCalledTimes(3);
+    expect(rpcMetrics.retries).toBe(2);
+  });
+
+  it("cancels bounded retry without issuing another read", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(readClient, "readContract").mockRejectedValue(new Error("429 rate limit"));
+    const controller = new AbortController();
+    const result = readProfile("profile-000006", controller.signal);
+    await Promise.resolve();
+    controller.abort();
+    await expect(result).rejects.toThrow(/cancelled/);
+    expect(rpcMetrics.reads).toBe(1);
+  });
+
+  it("pauses finality polling while hidden and cancels on teardown", async () => {
+    let visibility = "hidden";
+    vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility as DocumentVisibilityState);
+    const wait = vi.spyOn(readClient, "waitForTransactionReceipt").mockResolvedValue(receiptWithReturn('"profile-000006"') as never);
+    localStorage.setItem("raic.pending-transaction.v1", JSON.stringify({
+      hash: `0x${"6".repeat(64)}`, method: "create_profile", expectedId: "", submittedAt: "2026-08-11T00:00:00Z",
+    }));
+    const paused = reconcilePending(vi.fn(async () => undefined), vi.fn());
+    await Promise.resolve();
+    expect(wait).not.toHaveBeenCalled();
+    visibility = "visible";
+    document.dispatchEvent(new Event("visibilitychange"));
+    await expect(paused).resolves.toBe(true);
+    expect(wait).toHaveBeenCalledOnce();
+
+    visibility = "hidden";
+    localStorage.setItem("raic.pending-transaction.v1", JSON.stringify({
+      hash: `0x${"7".repeat(64)}`, method: "create_profile", expectedId: "", submittedAt: "2026-08-11T00:00:00Z",
+    }));
+    const cancelled = reconcilePending(vi.fn(async () => undefined), vi.fn());
+    await Promise.resolve();
+    cancelRpcActivity();
+    await expect(cancelled).rejects.toThrow(/cancelled/);
   });
 });
 
