@@ -104,10 +104,13 @@ The shared read boundary was instrumented with `rpcMetrics` and regression spies
 | Browse `profile-000006` | 4: profile, artifact, assessment, decision | 0 | a new explicit lookup supersedes and aborts the prior lookup |
 | Load successor approval facts | 3: successor, predecessor, canonical pointer | 0 | account/network/disconnect clears safe cache |
 | Create draft | 1 authoritative profile readback | 1 write, 1 bounded finality loop | cache cleared before readback |
-| Add artifact | 2: pre-write profile plus authoritative artifact readback | 1 write, 1 bounded finality loop | cache cleared before readback |
-| Activate initial/successor | at most 3 authoritative profile/pointer reads | 1 write, 1 bounded finality loop | cache cleared before readback |
-| Assess | 2: pre-write profile plus authoritative assessment readback | 1 write, 1 bounded finality loop | cache cleared before readback |
-| Reconcile saved transaction | 1–3 according to saved method | 0 new writes, 1 bounded finality loop | cache cleared before readback |
+| Load existing draft | 1 authoritative profile read | 0 | explicit lookup, no background polling |
+| Add artifact | 3: pre-write profile, authoritative artifact and updated profile readback | 1 write, 1 bounded finality loop | cache cleared before readback |
+| Activate initial/successor | initial: 3 + B; successor: 6 + B | 1 write, 1 bounded finality loop | cache cleared before readback |
+| Assess | 2 + B: pre-write profile, assessment readback, then Browse | 1 write, 1 bounded finality loop | cache cleared before readback |
+| Reconcile saved transaction | create: 1; add: 2; activate: up to 3 + B; assess: 1 + B | 0 new writes, 1 bounded finality loop | cache cleared before readback |
+
+Here B is the subsequent Browse refresh: `1 + artifact_count` for an unassessed profile, or `2 + 2 * artifact_count` with an assessment (at most 8 reads for three artifacts). These are conservative successful-read upper bounds before safe cache reuse, excluding transport retries and finality receipt polling. Draft recovery reuses the verified profile to restore the registration workflow; it does not add an extra hydration request after creation. Regression tests cover recovered initial/successor routing, resumed draft eligibility, failed reads, and activation/assessment result navigation. These local checks do not replace E2E on the final deployed bundle.
 
 Identical concurrent reads produce one physical call; a short two-second cache suppresses immediate duplicate safe reads. Transient reads make at most three physical attempts. Writes are never retried. Finality polling performs one SDK receipt request per visible four-second interval, pauses while the page is hidden, and is aborted on disconnect or component teardown.
 

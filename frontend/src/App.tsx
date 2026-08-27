@@ -97,6 +97,8 @@ export default function App() {
   const [doi, setDoi] = useState("");
   const [previousId, setPreviousId] = useState("");
   const [draftId, setDraftId] = useState("");
+  const [draftProfile, setDraftProfile] = useState<StringRecord | null>(null);
+  const [resumeId, setResumeId] = useState("");
   const [artifact, setArtifact] = useState<ArtifactDraft>(emptyArtifact);
   const [assessId, setAssessId] = useState("");
 
@@ -140,6 +142,9 @@ export default function App() {
   }, []);
 
   const canWrite = Boolean(contractAddress && wallet && account) && !busy;
+  const ownsDraft = Boolean(draftProfile?.state === "DRAFT" && account &&
+    draftProfile.authority?.toLowerCase() === account.toLowerCase());
+  const draftCount = numberField(draftProfile, "artifact_count");
   const report = (next: TransactionProgress) => setProgress(next);
 
   async function run(task: () => Promise<void>) {
@@ -179,6 +184,34 @@ export default function App() {
     return { wallet, account };
   }
 
+  function restoreDraft(result: StringRecord) {
+    if (!result.profile_id || !result.canonical_work_doi || !result.authority ||
+        typeof result.previous_profile_id !== "string" ||
+        !/^[0-3]$/.test(result.artifact_count ?? "") || !result.state) {
+      throw new Error("Draft readback was incomplete. Load the draft again.");
+    }
+    setDraftProfile(result); setDraftId(result.profile_id);
+    setDoi(result.canonical_work_doi); setPreviousId(result.previous_profile_id);
+    setLookupId(result.profile_id); setResumeId(result.profile_id);
+    setArtifact(emptyArtifact()); setRegisterMode("create"); setView("register");
+  }
+
+  async function resumeDraft() {
+    setDraftProfile(null);
+    const id = resumeId.trim();
+    if (!/^profile-[0-9]{6}$/.test(id)) throw new Error("Enter an existing profile-XXXXXX draft ID.");
+    const result = await readProfile(id);
+    if (result.profile_id !== id || result.state !== "DRAFT") throw new Error("Only an existing DRAFT profile can be resumed.");
+    restoreDraft(result);
+  }
+
+  async function editableDraft(signer: string) {
+    const result = await readProfile(draftId);
+    if (result.profile_id !== draftId || result.state !== "DRAFT") throw new Error("The selected profile is not an editable draft.");
+    if (result.authority?.toLowerCase() !== signer.toLowerCase()) throw new Error("Connect the draft authority wallet before editing.");
+    return result;
+  }
+
   async function createProfile() {
     await run(async () => {
       const signer = requireWallet();
@@ -191,6 +224,7 @@ export default function App() {
         createdId = returnedProfileId(receipt);
         const result = await readProfile(createdId);
         assertReadbackFields({ ...result, authority: (result.authority ?? "").toLowerCase() }, expectedFields);
+        restoreDraft(result);
       }, report);
       setDraftId(createdId); setLookupId(createdId);
     });
@@ -199,8 +233,8 @@ export default function App() {
   async function addArtifact() {
     await run(async () => {
       const signer = requireWallet();
-      const before = await readProfile(draftId);
-      if (before.state !== "DRAFT") throw new Error("The selected profile is not an editable draft.");
+      const before = await editableDraft(signer.account);
+      if (numberField(before, "artifact_count") >= 3) throw new Error("A draft can contain at most three artifacts.");
       const expectedFields = artifactReadbackFields(artifact);
       await submitWrite(signer.wallet, signer.account, "add_artifact", [
         draftId, artifact.artifactType, artifact.sourceKind, artifact.sourceId, artifact.relationship,
@@ -209,6 +243,9 @@ export default function App() {
         const index = returnedArtifactIndex(receipt);
         const result = await readArtifact(draftId, index);
         assertReadbackFields(result, { ...expectedFields, artifact_index: String(index) });
+        const updated = await readProfile(draftId);
+        if (updated.profile_id !== draftId || numberField(updated, "artifact_count") <= index) throw new Error("Artifact profile readback was incomplete.");
+        restoreDraft(updated);
       }, report);
       setArtifact(emptyArtifact());
     });
@@ -297,6 +334,7 @@ export default function App() {
         if (predResult.state !== "SUPERSEDED") throw new Error("Predecessor profile was not superseded.");
         const activeId = await readActiveProfile(workDoi);
         if (activeId !== succId) throw new Error("Active profile for DOI did not resolve to the successor.");
+        if (draftId === succId) setDraftProfile(succResult);
       }, report);
 
       setLookupId(succId);
@@ -308,6 +346,9 @@ export default function App() {
   async function activateProfile() {
     await run(async () => {
       const signer = requireWallet();
+      const before = await editableDraft(signer.account);
+      if (before.previous_profile_id) throw new Error("Use Approve existing successor for this draft.");
+      if (numberField(before, "artifact_count") < 1) throw new Error("Add an artifact before activation.");
       await submitWrite(signer.wallet, signer.account, "activate_profile", [draftId], draftId, undefined, async () => {
         const result = await readProfile(draftId);
         if (result.state !== "ACTIVE") throw new Error("Profile activation was not reflected in contract state.");
@@ -317,6 +358,7 @@ export default function App() {
         }
         const activeId = await readActiveProfile(result.canonical_work_doi);
         if (activeId !== draftId) throw new Error("Active profile for DOI did not resolve to the successor.");
+        setDraftProfile(result);
       }, report);
       setLookupId(draftId); await loadProfile(draftId); setView("browse");
     });
@@ -342,11 +384,14 @@ export default function App() {
           if (!pending.expectedFields) throw new Error("Recovered profile expectation was missing.");
           const id = returnedProfileId(receipt); const result = await readProfile(id);
           assertReadbackFields({ ...result, authority: (result.authority ?? "").toLowerCase() }, pending.expectedFields);
-          setDraftId(id); setLookupId(id);
+          restoreDraft(result);
         } else if (pending.method === "add_artifact") {
           if (!pending.expectedFields) throw new Error("Recovered artifact expectation was missing.");
           const index = returnedArtifactIndex(receipt); const result = await readArtifact(pending.expectedId, index);
           assertReadbackFields(result, { ...pending.expectedFields, artifact_index: String(index) });
+          const recovered = await readProfile(pending.expectedId);
+          if (recovered.profile_id !== pending.expectedId || numberField(recovered, "artifact_count") <= index) throw new Error("Recovered artifact profile readback was incomplete.");
+          restoreDraft(recovered);
         } else if (pending.method === "activate_profile") {
           const result = await readProfile(pending.expectedId);
           if (result.state !== "ACTIVE") throw new Error("Recovered activation readback failed.");
@@ -356,9 +401,11 @@ export default function App() {
           }
           const activeId = await readActiveProfile(result.canonical_work_doi);
           if (activeId !== pending.expectedId) throw new Error("Recovered active profile for DOI did not resolve to the activated profile.");
+          setDraftProfile(result); await loadProfile(pending.expectedId); setView("browse");
         } else if (pending.method === "assess_profile") {
           const [id, epoch] = pending.expectedId.split(":"); const result = await readAssessment(id, Number(epoch));
           if (!result.overall_status) throw new Error("Recovered assessment readback failed.");
+          await loadProfile(id); setView("browse");
         } else throw new Error("Unknown pending method; refusing to infer a readback.");
       }, report);
     });
@@ -436,6 +483,10 @@ export default function App() {
 
             {registerMode === "create" ? (
               <>
+                <form className="lookup" onSubmit={(e) => { e.preventDefault(); void run(resumeDraft); }}>
+                  <Field label="Resume draft ID" hint="After a reload, load your existing draft instead of creating it again."><input value={resumeId} onChange={(e) => setResumeId(e.target.value)} placeholder="profile-XXXXXX" /></Field>
+                  <button className="button secondary" disabled={busy || !contractAddress || !resumeId.trim()}>Load draft</button>
+                </form>
                 <div className="phase"><div className="phase-number">01</div><div className="phase-body"><h3>Create an immutable draft identity</h3><div className="form-grid">
                   <Field label="Canonical work DOI"><input value={doi} onChange={(e) => setDoi(e.target.value)} placeholder="10.1234/example" disabled={Boolean(draftId)} /></Field>
                   <Field label="Previous profile ID" hint="Anyone may propose a successor, but only the predecessor authority can approve it."><input value={previousId} onChange={(e) => setPreviousId(e.target.value)} placeholder="Optional" disabled={Boolean(draftId)} /></Field>
@@ -448,7 +499,8 @@ export default function App() {
                   <div className="form-grid"><Field label="Expected relationship"><input value={artifact.relationship} onChange={(e) => setArtifact({ ...artifact, relationship: e.target.value })} placeholder="How this artifact relates to the work" /></Field><Field label="Expected version"><input value={artifact.version} onChange={(e) => setArtifact({ ...artifact, version: e.target.value })} placeholder="Exact expected release or version" /></Field></div>
                   <div className="form-grid"><Field label="Declared digest" hint="Optional canonical or algorithm-prefixed digest."><input value={artifact.digest} onChange={(e) => setArtifact({ ...artifact, digest: e.target.value })} placeholder="sha256:…" /></Field><Field label="License path" hint="GitHub exact commits only."><input value={artifact.licensePath} onChange={(e) => setArtifact({ ...artifact, licensePath: e.target.value })} disabled={artifact.sourceKind !== "GITHUB_COMMIT"} placeholder="LICENSE" /></Field></div>
                   <div className="checks"><label><input type="checkbox" checked={artifact.licenseRequired} onChange={(e) => setArtifact({ ...artifact, licenseRequired: e.target.checked })} /> License declaration required</label><label><input type="checkbox" checked={artifact.restrictedAllowed} onChange={(e) => setArtifact({ ...artifact, restrictedAllowed: e.target.checked })} /> Disclosed restricted access allowed</label></div>
-                  <button className="button secondary" disabled={!canWrite || !draftId || !artifact.sourceId || !artifact.relationship || !artifact.version} onClick={addArtifact}><Plus size={17} /> Add artifact</button>
+                  {draftProfile && <p>{draftCount} / 3 artifacts registered. {draftProfile.state !== "DRAFT" ? "This profile is no longer editable." : !ownsDraft ? "Connect the draft authority wallet to add artifacts." : "Draft authority connected."}</p>}
+                  <button className="button secondary" disabled={!canWrite || !ownsDraft || draftCount >= 3 || !artifact.sourceId || !artifact.relationship || !artifact.version} onClick={addArtifact}><Plus size={17} /> Add artifact</button>
                 </div></div>
 
                 <div className={`phase ${!draftId ? "locked" : ""}`}><div className="phase-number">03</div><div className="phase-body">
@@ -457,8 +509,8 @@ export default function App() {
                     ? "Share this profile ID with the active predecessor authority. They must load it under Approve existing successor before it can become canonical."
                     : "Initial profile activation freezes this version. Only the creating draft authority can activate it."}</p>
                   {previousId.trim()
-                    ? <button className="button secondary" disabled={!draftId} onClick={() => { setApproveSuccessorId(draftId); setLoadedSuccessor(null); setLoadedPredecessor(null); setActiveProfileForDoi(""); setRegisterMode("approve"); }}><ShieldCheck size={17} /> Open approval workflow</button>
-                    : <button className="button primary" disabled={!canWrite || !draftId} onClick={activateProfile}><ShieldCheck size={17} /> Activate profile</button>}
+                    ? <button className="button secondary" disabled={!draftProfile || draftProfile.state !== "DRAFT" || draftCount < 1} onClick={() => { setApproveSuccessorId(draftId); setLoadedSuccessor(null); setLoadedPredecessor(null); setActiveProfileForDoi(""); setRegisterMode("approve"); }}><ShieldCheck size={17} /> Open approval workflow</button>
+                    : <button className="button primary" disabled={!canWrite || !ownsDraft || draftCount < 1} onClick={activateProfile}><ShieldCheck size={17} /> Activate profile</button>}
                 </div></div>
               </>
             ) : (

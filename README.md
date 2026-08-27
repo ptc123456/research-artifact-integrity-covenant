@@ -108,6 +108,8 @@ Wallet connection always opens a provider selector; no wallet is selected automa
 
 The frontend saves the submitted hash and expected fields before polling. A transient RPC error leaves that record intact, blocks duplicate submission, and offers reconciliation of the same hash. The record is cleared only after terminal success and exact readback. Disagreement, execution failure, malformed receipts, unknown terminal state, or readback mismatch is shown as an error rather than success.
 
+After reloading, select your wallet again. If a transaction is pending, reconcile it before retrying. To continue a previously created draft, open Register and enter its ID under **Resume draft ID**, then choose **Load draft**. The contract supplies its DOI, predecessor, authority, state, and artifact count. Only the draft authority can add artifacts; initial activation requires at least one artifact. Successors use the separate predecessor-approval workflow.
+
 ## Run locally
 
 Prerequisites: Python 3.12, Node.js, npm, `uv`, and `genvm-lint`.

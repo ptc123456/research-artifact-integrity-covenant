@@ -56,6 +56,138 @@ const successorProposal = {
   current_status: "",
 };
 
+describe("restart-safe draft workflow", () => {
+  const hash = `0x${"a".repeat(64)}` as `0x${string}`;
+  beforeEach(() => {
+    vi.spyOn(genlayer, "connectWallet").mockResolvedValue(successorProposal.authority);
+    vi.spyOn(genlayer, "submitWrite").mockRejectedValue(new Error("Unexpected write"));
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  async function connect() {
+    fireEvent.click(screen.getByRole("button", { name: /connect wallet/i }));
+    fireEvent.click(screen.getByRole("button", { name: /metamask/i }));
+    await screen.findByRole("button", { name: /0x2222…2222/i });
+  }
+
+  function register() {
+    fireEvent.click(within(screen.getByRole("navigation", { name: /primary navigation/i })).getByRole("button", { name: /^register$/i }));
+  }
+
+  it.each(["profile-000001", ""])("hydrates recovered creation with predecessor '%s' without a second write", async (previous) => {
+    const draft = { ...successorProposal, previous_profile_id: previous, artifact_count: "0" };
+    const expectedFields = { canonical_work_doi: draft.canonical_work_doi, previous_profile_id: previous, state: "DRAFT", authority: draft.authority };
+    const pending = { hash, method: "create_profile", expectedId: "", expectedFields, submittedAt: "2026-08-27T00:00:00Z" };
+    vi.spyOn(genlayer, "loadPendingTransaction").mockReturnValue(pending);
+    vi.spyOn(genlayer, "returnedProfileId").mockReturnValue(draft.profile_id);
+    vi.spyOn(genlayer, "readProfile").mockResolvedValue(draft);
+    vi.spyOn(genlayer, "reconcilePending").mockImplementation(async (verify) => { await verify(pending, {}); return true; });
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: /reconcile pending/i }));
+    await screen.findByDisplayValue(draft.canonical_work_doi);
+    expect(screen.getByPlaceholderText("Optional")).toHaveValue(previous);
+    expect(screen.getByPlaceholderText("Optional")).toBeDisabled();
+    await connect();
+    expect(screen.getByRole("button", { name: previous ? /open approval workflow/i : /activate profile/i })).toBeDisabled();
+    if (previous) expect(screen.queryByRole("button", { name: /^activate profile$/i })).not.toBeInTheDocument();
+    expect(genlayer.readProfile).toHaveBeenCalledTimes(1);
+    expect(genlayer.submitWrite).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when creation readback does not match the saved expectation", async () => {
+    const pending = { hash, method: "create_profile", expectedId: "", expectedFields: { previous_profile_id: "profile-000009" }, submittedAt: "2026-08-27T00:00:00Z" };
+    vi.spyOn(genlayer, "loadPendingTransaction").mockReturnValue(pending);
+    vi.spyOn(genlayer, "returnedProfileId").mockReturnValue(successorProposal.profile_id);
+    vi.spyOn(genlayer, "readProfile").mockResolvedValue(successorProposal);
+    vi.spyOn(genlayer, "reconcilePending").mockImplementation(async (verify) => { await verify(pending, {}); return true; });
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: /reconcile pending/i }));
+    await screen.findByRole("alert");
+    register();
+    expect(screen.getByPlaceholderText("10.1234/example")).toHaveValue("");
+    expect(genlayer.submitWrite).not.toHaveBeenCalled();
+  });
+
+  it.each([0, 1, 3])("resumes an existing initial draft with %i artifacts and gates activation/addition", async (count) => {
+    vi.spyOn(genlayer, "readProfile").mockResolvedValue({ ...successorProposal, previous_profile_id: "", artifact_count: String(count) });
+    render(<App />); register(); await connect();
+    fireEvent.change(screen.getByPlaceholderText("profile-XXXXXX"), { target: { value: successorProposal.profile_id } });
+    fireEvent.click(screen.getByRole("button", { name: /load draft/i }));
+    await screen.findByDisplayValue(successorProposal.canonical_work_doi);
+    const activation = screen.getByRole("button", { name: /^activate profile$/i });
+    if (count) expect(activation).toBeEnabled(); else expect(activation).toBeDisabled();
+    fireEvent.change(screen.getByPlaceholderText("Exact identifier"), { target: { value: "10.1234/data" } });
+    fireEvent.change(screen.getByPlaceholderText("How this artifact relates to the work"), { target: { value: "Data" } });
+    fireEvent.change(screen.getByPlaceholderText("Exact expected release or version"), { target: { value: "1" } });
+    const add = screen.getByRole("button", { name: /add artifact/i });
+    if (count === 3) expect(add).toBeDisabled(); else expect(add).toBeEnabled();
+    expect(genlayer.readProfile).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: /0x2222…2222/i }));
+    expect(add).toBeDisabled(); expect(activation).toBeDisabled();
+  });
+
+  it("rechecks draft authority immediately before initial activation", async () => {
+    const draft = { ...successorProposal, previous_profile_id: "" };
+    vi.spyOn(genlayer, "readProfile").mockResolvedValueOnce(draft).mockResolvedValue({ ...draft, authority: predecessorProfile.authority });
+    render(<App />); register(); await connect();
+    fireEvent.change(screen.getByPlaceholderText("profile-XXXXXX"), { target: { value: draft.profile_id } });
+    fireEvent.click(screen.getByRole("button", { name: /load draft/i }));
+    await screen.findByDisplayValue(draft.canonical_work_doi);
+    fireEvent.click(screen.getByRole("button", { name: /^activate profile$/i }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/draft authority/i);
+    expect(genlayer.submitWrite).not.toHaveBeenCalled();
+  });
+
+  it("restores artifact recovery to the original successor and registered count", async () => {
+    const pending = { hash, method: "add_artifact", expectedId: successorProposal.profile_id, expectedFields: { artifact_type: "DATA" }, submittedAt: "2026-08-27T00:00:00Z" };
+    vi.spyOn(genlayer, "loadPendingTransaction").mockReturnValue(pending);
+    vi.spyOn(genlayer, "returnedArtifactIndex").mockReturnValue(0);
+    vi.spyOn(genlayer, "readArtifact").mockResolvedValue({ artifact_index: "0", artifact_type: "DATA" });
+    vi.spyOn(genlayer, "readProfile").mockResolvedValue(successorProposal);
+    vi.spyOn(genlayer, "reconcilePending").mockImplementation(async (verify) => { await verify(pending, {}); return true; });
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: /reconcile pending/i }));
+    await screen.findByDisplayValue(successorProposal.canonical_work_doi);
+    expect(screen.getByRole("button", { name: /open approval workflow/i })).toBeEnabled();
+    expect(screen.getByText(/1 \/ 3 artifacts registered/)).toBeInTheDocument();
+    expect(genlayer.readProfile).toHaveBeenCalledTimes(1);
+    expect(genlayer.readArtifact).toHaveBeenCalledTimes(1);
+    expect(genlayer.submitWrite).not.toHaveBeenCalled();
+  });
+
+  it.each(["activate_profile", "assess_profile"])("shows authoritative Browse results after recovering %s", async (method) => {
+    const current = { ...successorProposal, state: "ACTIVE", assessment_count: "1", current_status: "READY" };
+    const pending = { hash, method, expectedId: current.profile_id + (method === "assess_profile" ? ":1" : ""), submittedAt: "2026-08-27T00:00:00Z" };
+    vi.spyOn(genlayer, "loadPendingTransaction").mockReturnValue(pending);
+    vi.spyOn(genlayer, "readProfile").mockImplementation(async (id) => id === current.profile_id ? current : { ...predecessorProfile, state: "SUPERSEDED" });
+    vi.spyOn(genlayer, "readActiveProfile").mockResolvedValue(current.profile_id);
+    vi.spyOn(genlayer, "readAssessment").mockResolvedValue({ profile_id: current.profile_id, epoch: "1", overall_status: "READY", assessed_at: "2026-08-27T00:00:00Z" });
+    vi.spyOn(genlayer, "readArtifact").mockResolvedValue({ artifact_type: "DATA", source_kind: "ZENODO_RECORD", canonical_source_id: "123" });
+    vi.spyOn(genlayer, "readDecision").mockResolvedValue({ identity: "MATCH" });
+    vi.spyOn(genlayer, "reconcilePending").mockImplementation(async (verify) => { await verify(pending, {}); return true; });
+    render(<App />); register();
+    fireEvent.click(screen.getByRole("button", { name: /reconcile pending/i }));
+    expect(await screen.findByText(current.canonical_work_doi)).toBeInTheDocument();
+    expect(screen.getByText("ACTIVE")).toBeInTheDocument();
+    expect(screen.getByText("READY")).toBeInTheDocument();
+    expect(genlayer.submitWrite).not.toHaveBeenCalled();
+  });
+
+  it("keeps editing disabled when loading a replacement draft fails", async () => {
+    vi.spyOn(genlayer, "readProfile").mockResolvedValueOnce(successorProposal).mockRejectedValue(new Error("RPC unavailable"));
+    render(<App />); register(); await connect();
+    fireEvent.change(screen.getByPlaceholderText("profile-XXXXXX"), { target: { value: successorProposal.profile_id } });
+    fireEvent.click(screen.getByRole("button", { name: /load draft/i }));
+    await screen.findByDisplayValue(successorProposal.canonical_work_doi);
+    fireEvent.change(screen.getByPlaceholderText("profile-XXXXXX"), { target: { value: "profile-000009" } });
+    fireEvent.click(screen.getByRole("button", { name: /load draft/i }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("RPC unavailable");
+    expect(screen.getByRole("button", { name: /add artifact/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /open approval workflow/i })).toBeDisabled();
+    expect(genlayer.submitWrite).not.toHaveBeenCalled();
+  });
+});
+
 describe("unconfigured application", () => {
   beforeEach(() => {
     mockContractAddress = null;
@@ -135,8 +267,8 @@ describe("independent predecessor approval journey from clean page", () => {
     render(<App />);
     await connectPredecessorWallet();
     const on = mockWallet.provider.on as ReturnType<typeof vi.fn>;
-    const accountHandler = on.mock.calls.find(([event]) => event === "accountsChanged")?.[1];
-    const chainHandler = on.mock.calls.find(([event]) => event === "chainChanged")?.[1];
+    const accountHandler = [...on.mock.calls].reverse().find(([event]) => event === "accountsChanged")?.[1];
+    const chainHandler = [...on.mock.calls].reverse().find(([event]) => event === "chainChanged")?.[1];
     expect(accountHandler).toBeTypeOf("function");
     expect(chainHandler).toBeTypeOf("function");
     act(() => accountHandler([]));
